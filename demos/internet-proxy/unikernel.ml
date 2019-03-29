@@ -134,7 +134,7 @@ module Main (C : CONSOLE) (MClock: MCLOCK) (N : NETWORK) (E : ETHERNET) (A : ARP
          ~arpv4:(A.input a)
          ~ipv4:(I4.input
                   ~tcp:(fun ~src:src_addr ~dst:dst_addr data ->
-                      (* let src_port = S.get_tcp_src_port data in*)
+                      let src_port = Tcp.Tcp_wire.get_tcp_src_port data in
                       Lwt.return_unit
                     )
                   ~udp:(fun ~src:src_addr ~dst:dst_addr data -> Lwt.return_unit)

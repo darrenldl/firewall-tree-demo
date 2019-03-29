@@ -3,6 +3,7 @@ open Mirage
 let packages = [
   package "ethernet";
   package "firewall-tree";
+  package "tcpip";
 ]
 
 let main =
