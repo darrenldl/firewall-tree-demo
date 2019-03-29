@@ -9,28 +9,32 @@ let packages = [
 let main =
   foreign
     ~packages
-    "Unikernel.Main" (console @-> network @-> ethernet @-> arpv4 @-> ipv4 @-> ipv6 @-> job)
+    "Unikernel.Main" (console @-> network @-> network @-> ethernet @-> ethernet @-> arpv4 @-> arpv4 @-> ipv4 @-> ipv4 @-> job)
 
-let net = default_network
-let ethif = etif net
+let net_A = netif ~group:"side-A" "fjjidosjofnoisjos"
+let ethif_A = etif net_A
 
-let arp = arp ethif
+let net_B = netif ~group:"side-B" "1fjdiso"
+let ethif_B = etif net_B
 
-let ipv4 =
+let arp_A = arp ethif_A
+let arp_B = arp ethif_B
+
+let ipv4_A =
   let addr = Ipaddr.V4.make 10 0 0 10 in
   let config = {
     network = (Ipaddr.V4.Prefix.make 24 addr, addr);
     gateway = None;
   } in
-  create_ipv4 ~config ethif arp
+  create_ipv4 ~config ethif_A arp_A
 
-let ipv6 =
+let ipv4_B =
+  let addr = Ipaddr.V4.make 11 0 0 10 in
   let config = {
-    addresses = [];
-    netmasks  = [];
-    gateways  = [];
+    network = (Ipaddr.V4.Prefix.make 24 addr, addr);
+    gateway = None;
   } in
-  create_ipv6 ethif config
+  create_ipv4 ~config ethif_B arp_B
 
 let () =
-  register "ft-demo0" [ main $ default_console $ default_network $ ethif $ arp $ ipv4 $ ipv6 ]
+  register "ft-demo0" [ main $ default_console $ net_A $ net_B $ ethif_A $ ethif_B $ arp_A $ arp_B $ ipv4_A $ ipv4_B ]
