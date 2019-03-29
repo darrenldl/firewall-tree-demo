@@ -1,8 +1,7 @@
 open Lwt.Infix
 open Mirage_types_lwt
-open Firewall_tree
 
-module Main (C : CONSOLE) (MClock: Mirage_types.MCLOCK) (N : NETWORK) (E : ETHERNET) (A : ARP) (I4 : IPV4) = struct
+module Main (C : CONSOLE) (MClock: MCLOCK) (N : NETWORK) (E : ETHERNET) (A : ARP) (I4 : IPV4) (T : TCP) = struct
   module Base = struct
     let id x = x
 
@@ -109,17 +108,17 @@ module Main (C : CONSOLE) (MClock: Mirage_types.MCLOCK) (N : NETWORK) (E : ETHER
     module UDP = struct
       type udp_port = int
 
-      type udp_header = UDP of {src_port : udp_port; dst_port : udp_port}
+      type udp_header = {src_port : udp_port; dst_port : udp_port}
 
       type udp_payload_raw = string
 
       let compare_udp_port = compare
 
-      let udp_header_to_src_port (UDP header) = header.src_port
+      let udp_header_to_src_port header = header.src_port
 
-      let udp_header_to_dst_port (UDP header) = header.dst_port
+      let udp_header_to_dst_port header = header.dst_port
 
-      let make_udp_header ~src_port ~dst_port = UDP {src_port; dst_port}
+      let make_udp_header ~src_port ~dst_port = {src_port; dst_port}
 
       let udp_payload_raw_to_bytes = id
 
@@ -129,12 +128,13 @@ module Main (C : CONSOLE) (MClock: Mirage_types.MCLOCK) (N : NETWORK) (E : ETHER
 
   module FT = Firewall_tree.Make(Base)
 
-  let start c m n e a i4 =
+  let start c m n e a i4 tcp =
     N.listen n ~header_size:Ethernet_wire.sizeof_ethernet
       (E.input
          ~arpv4:(A.input a)
          ~ipv4:(I4.input
                   ~tcp:(fun ~src:src_addr ~dst:dst_addr data ->
+                      (* let src_port = S.get_tcp_src_port data in*)
                       Lwt.return_unit
                     )
                   ~udp:(fun ~src:src_addr ~dst:dst_addr data -> Lwt.return_unit)
