@@ -9,7 +9,7 @@ let packages = [
 let main =
   foreign
     ~packages
-    "Unikernel.Main" (console @-> network @-> ethernet @-> arpv4 @-> ipv4 @-> job)
+    "Unikernel.Main" (console @-> mclock @-> network @-> ethernet @-> arpv4 @-> ipv4 @-> job)
 
 let net = default_network
 let ethif = etif net
@@ -28,4 +28,4 @@ let ipv4 =
   create_ipv4 ethif arp
 
 let () =
-  register "ft-demo0" [ main $ default_console $ net $ ethif $ arp $ ipv4 ]
+  register "proxy" [ main $ default_console $ default_monotonic_clock $ net $ ethif $ arp $ ipv4 ]
