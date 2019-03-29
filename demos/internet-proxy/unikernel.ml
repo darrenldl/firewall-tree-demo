@@ -1,7 +1,7 @@
 open Lwt.Infix
 open Mirage_types_lwt
 
-module Main (C : CONSOLE) (MClock: MCLOCK) (N : NETWORK) (E : ETHERNET) (A : ARP) (I4 : IPV4) (T : TCP) = struct
+module Main (C : CONSOLE) (MClock: MCLOCK) (N : NETWORK) (E : ETHERNET) (A : ARP) (I4 : IPV4) (ICMP4 : ICMPV4) (T : TCP) = struct
   module Base = struct
     let id x = x
 
@@ -151,7 +151,7 @@ module Main (C : CONSOLE) (MClock: MCLOCK) (N : NETWORK) (E : ETHERNET) (A : ARP
                              |])
           }
 
-  let start c m n e a i4 tcp =
+  let start c m n e a i4 icmp4 tcp =
     N.listen n ~header_size:Ethernet_wire.sizeof_ethernet
       (E.input
          ~arpv4:(A.input a)
@@ -171,7 +171,11 @@ module Main (C : CONSOLE) (MClock: MCLOCK) (N : NETWORK) (E : ETHERNET) (A : ARP
                       let pdu = Layer3 (IPv4 (IPv4_pkt { header = ipv4_header; payload = IPv4_payload_raw data })) in
                       match FT.decide ftree ~src_netif:Net0 rlu_ipv4 rlu_ipv6 pdu with
                       | (Drop, _) -> C.log c "Drop"
-                      | (Forward, _) -> C.log c "Forward"
+                      | (Forward, _) -> (
+                          C.log c "Forward" <&>
+                          ICMP4.input icmp4
+                            ~src:src_addr ~dst:dst_addr data
+                        )
                       | (Echo_reply, _) -> C.log c "Echo_reply"
                     )
                   i4)
