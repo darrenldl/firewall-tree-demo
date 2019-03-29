@@ -21,7 +21,7 @@ module Main (C : CONSOLE) (MClock: MCLOCK) (N : NETWORK) (E : ETHERNET) (A : ARP
         dst_addr : ipv4_addr;
       }
 
-      type ipv4_payload_raw = string
+      type ipv4_payload_raw = Cstruct.t
 
       let compare_ipv4_addr = Ipaddr.V4.compare
 
@@ -34,8 +34,8 @@ module Main (C : CONSOLE) (MClock: MCLOCK) (N : NETWORK) (E : ETHERNET) (A : ARP
 
       let make_ipv4_header ~src_addr ~dst_addr = { src_addr; dst_addr }
 
-      let ipv4_payload_raw_to_bytes = id
-      let bytes_to_ipv4_payload_raw = id
+      let ipv4_payload_raw_to_bytes c = Cstruct.to_string c
+      let bytes_to_ipv4_payload_raw s = Cstruct.of_string s
     end
 
     module IPv6 = Firewall_tree.Mock_tree_base.IPv6
@@ -128,17 +128,52 @@ module Main (C : CONSOLE) (MClock: MCLOCK) (N : NETWORK) (E : ETHERNET) (A : ARP
 
   module FT = Firewall_tree.Make(Base)
 
+  module Selectors = Firewall_tree.Selectors.Make(FT)
+
+  let data_to_tcp_header data =
+    let src_port = Tcp.Tcp_wire.get_tcp_src_port data in
+    let dst_port = Tcp.Tcp_wire.get_tcp_dst_port data in
+    let ack = Tcp.Tcp_wire.get_ack data in
+    let rst = Tcp.Tcp_wire.get_rst data in
+    let syn = Tcp.Tcp_wire.get_syn data in
+    let fin = Tcp.Tcp_wire.get_fin data in
+    FT.TCP.make_tcp_header ~src_port ~dst_port ~ack ~rst ~syn ~fin
+
+  let rlu_ipv4 = FT.RLU_IPv4.make ()
+  let rlu_ipv6 = FT.RLU_IPv6.make ()
+
+  let ftree =
+    let open FT in
+    Start { default = Drop;
+            next = Select (Selectors.make_pdu_based_load_balancer_round_robin
+                             [| End Drop
+                              ; End Forward
+                             |])
+          }
+
   let start c m n e a i4 tcp =
     N.listen n ~header_size:Ethernet_wire.sizeof_ethernet
       (E.input
          ~arpv4:(A.input a)
          ~ipv4:(I4.input
                   ~tcp:(fun ~src:src_addr ~dst:dst_addr data ->
-                      let src_port = Tcp.Tcp_wire.get_tcp_src_port data in
+                      let ipv4_header = FT.IPv4.make_ipv4_header ~src_addr ~dst_addr in
+                      let tcp_header = data_to_tcp_header data in
                       Lwt.return_unit
                     )
-                  ~udp:(fun ~src:src_addr ~dst:dst_addr data -> Lwt.return_unit)
-                  ~default:(fun ~proto ~src:_ ~dst:_ _data -> C.log c "ping on side A")
+                  ~udp:(fun ~src:src_addr ~dst:dst_addr data ->
+                      let ipv4_header = FT.IPv4.make_ipv4_header ~src_addr ~dst_addr in
+                      Lwt.return_unit
+                    )
+                  ~default:(fun ~proto ~src:src_addr ~dst:dst_addr data ->
+                      let open FT.PDU in
+                      let ipv4_header = FT.IPv4.make_ipv4_header ~src_addr ~dst_addr in
+                      let pdu = Layer3 (IPv4 (IPv4_pkt { header = ipv4_header; payload = IPv4_payload_raw data })) in
+                      match FT.decide ftree ~src_netif:Net0 rlu_ipv4 rlu_ipv6 pdu with
+                      | (Drop, _) -> C.log c "Drop"
+                      | (Forward, _) -> C.log c "Forward"
+                      | (Echo_reply, _) -> C.log c "Echo_reply"
+                    )
                   i4)
          ~ipv6:(fun _ -> Lwt.return_unit)
          e) >>= (fun _ -> Lwt.return_unit)
