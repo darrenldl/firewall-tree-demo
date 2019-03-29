@@ -25,17 +25,17 @@ module Main (C : CONSOLE) (MClock: MCLOCK) (N : NETWORK) (E : ETHERNET) (A : ARP
 
       let compare_ipv4_addr = Ipaddr.V4.compare
 
-      let ipv4_addr_to_bytes = Ipaddr.V4.to_bytes
+      let ipv4_addr_to_byte_string = Ipaddr.V4.to_bytes
 
-      let bytes_to_ipv4_addr = Ipaddr.V4.of_bytes_exn
+      let byte_string_to_ipv4_addr = Ipaddr.V4.of_bytes_exn
 
       let ipv4_header_to_src_addr r = r.src_addr
       let ipv4_header_to_dst_addr r = r.dst_addr
 
       let make_ipv4_header ~src_addr ~dst_addr = { src_addr; dst_addr }
 
-      let ipv4_payload_raw_to_bytes c = Cstruct.to_string c
-      let bytes_to_ipv4_payload_raw s = Cstruct.of_string s
+      let ipv4_payload_raw_to_byte_string c = Cstruct.to_string c
+      let byte_string_to_ipv4_payload_raw s = Cstruct.of_string s
     end
 
     module IPv6 = Firewall_tree.Mock_tree_base.IPv6
@@ -63,9 +63,9 @@ module Main (C : CONSOLE) (MClock: MCLOCK) (N : NETWORK) (E : ETHERNET) (A : ARP
       let make_icmpv4_header ~src_addr ~dst_addr ty =
         {src_addr; dst_addr; ty}
 
-      let icmpv4_payload_raw_to_bytes = id
+      let icmpv4_payload_raw_to_byte_string = id
 
-      let bytes_to_icmpv4_payload_raw = id
+      let byte_string_to_icmpv4_payload_raw = id
     end
 
     module ICMPv6 = Firewall_tree.Mock_tree_base.ICMPv6
@@ -100,9 +100,9 @@ module Main (C : CONSOLE) (MClock: MCLOCK) (N : NETWORK) (E : ETHERNET) (A : ARP
       let make_tcp_header ~src_port ~dst_port ~ack ~rst ~syn ~fin =
         {src_port; dst_port; ack; rst; syn; fin}
 
-      let tcp_payload_raw_to_bytes = id
+      let tcp_payload_raw_to_byte_string = id
 
-      let bytes_to_tcp_payload_raw = id
+      let byte_string_to_tcp_payload_raw = id
     end
 
     module UDP = struct
@@ -120,9 +120,9 @@ module Main (C : CONSOLE) (MClock: MCLOCK) (N : NETWORK) (E : ETHERNET) (A : ARP
 
       let make_udp_header ~src_port ~dst_port = {src_port; dst_port}
 
-      let udp_payload_raw_to_bytes = id
+      let udp_payload_raw_to_byte_string = id
 
-      let bytes_to_udp_payload_raw = id
+      let byte_string_to_udp_payload_raw = id
     end
   end
 
@@ -171,8 +171,9 @@ module Main (C : CONSOLE) (MClock: MCLOCK) (N : NETWORK) (E : ETHERNET) (A : ARP
                       let pdu = Layer3 (IPv4 (IPv4_pkt { header = ipv4_header; payload = IPv4_payload_raw data })) in
                       match FT.decide ftree ~src_netif:Net0 rlu_ipv4 rlu_ipv6 pdu with
                       | (Drop, _) -> C.log c "Drop"
-                      | (Forward, _) -> (
+                      | (Forward, p) -> (
                           C.log c "Forward" <&>
+                          C.log c (FT.To_debug_string.pdu_to_debug_string p) <&>
                           ICMP4.input icmp4
                             ~src:src_addr ~dst:dst_addr data
                         )
