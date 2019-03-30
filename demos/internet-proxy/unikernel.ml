@@ -52,7 +52,7 @@ module Main (C : CONSOLE) (MClock: MCLOCK) (N : NETWORK) (E : ETHERNET) (A : ARP
       type icmpv4_header =
         {src_addr : ipv4_addr; dst_addr : ipv4_addr; ty : icmpv4_type}
 
-      type icmpv4_payload_raw = string
+      type icmpv4_payload_raw = Cstruct.t
 
       let icmpv4_header_to_src_addr header = header.src_addr
 
@@ -63,9 +63,9 @@ module Main (C : CONSOLE) (MClock: MCLOCK) (N : NETWORK) (E : ETHERNET) (A : ARP
       let make_icmpv4_header ~src_addr ~dst_addr ty =
         {src_addr; dst_addr; ty}
 
-      let icmpv4_payload_raw_to_byte_string = id
+      let icmpv4_payload_raw_to_byte_string c = Cstruct.to_string c
 
-      let byte_string_to_icmpv4_payload_raw = id
+      let byte_string_to_icmpv4_payload_raw s = Cstruct.of_string s
     end
 
     module ICMPv6 = Firewall_tree.Mock_tree_base.ICMPv6
@@ -81,7 +81,7 @@ module Main (C : CONSOLE) (MClock: MCLOCK) (N : NETWORK) (E : ETHERNET) (A : ARP
         ; syn : bool
         ; fin : bool }
 
-      type tcp_payload_raw = string
+      type tcp_payload_raw = Cstruct.t
 
       let compare_tcp_port = compare
 
@@ -100,9 +100,9 @@ module Main (C : CONSOLE) (MClock: MCLOCK) (N : NETWORK) (E : ETHERNET) (A : ARP
       let make_tcp_header ~src_port ~dst_port ~ack ~rst ~syn ~fin =
         {src_port; dst_port; ack; rst; syn; fin}
 
-      let tcp_payload_raw_to_byte_string = id
+      let tcp_payload_raw_to_byte_string c = Cstruct.to_string c
 
-      let byte_string_to_tcp_payload_raw = id
+      let byte_string_to_tcp_payload_raw s = Cstruct.of_string s
     end
 
     module UDP = struct
@@ -110,7 +110,7 @@ module Main (C : CONSOLE) (MClock: MCLOCK) (N : NETWORK) (E : ETHERNET) (A : ARP
 
       type udp_header = {src_port : udp_port; dst_port : udp_port}
 
-      type udp_payload_raw = string
+      type udp_payload_raw = Cstruct.t
 
       let compare_udp_port = compare
 
@@ -120,9 +120,9 @@ module Main (C : CONSOLE) (MClock: MCLOCK) (N : NETWORK) (E : ETHERNET) (A : ARP
 
       let make_udp_header ~src_port ~dst_port = {src_port; dst_port}
 
-      let udp_payload_raw_to_byte_string = id
+      let udp_payload_raw_to_byte_string c = Cstruct.to_string c
 
-      let byte_string_to_udp_payload_raw = id
+      let byte_string_to_udp_payload_raw s = Cstruct.of_string s
     end
   end
 
@@ -139,9 +139,17 @@ module Main (C : CONSOLE) (MClock: MCLOCK) (N : NETWORK) (E : ETHERNET) (A : ARP
     let fin = Tcp.Tcp_wire.get_fin data in
     FT.TCP.make_tcp_header ~src_port ~dst_port ~ack ~rst ~syn ~fin
 
+  let data_to_tcp_pdu data =
+    let open FT.PDU in
+    let header = data_to_tcp_header data in
+    let data_offset = Tcp.Tcp_wire.get_data_offset data in
+    let data_raw = Cstruct.shift data data_offset in
+    TCP (TCP_pdu { header; payload = TCP_payload_raw data_raw })
+
   let rlu_ipv4 = FT.RLU_IPv4.make ()
   let rlu_ipv6 = FT.RLU_IPv6.make ()
 
+  (* define our policy through firewall tree *)
   let ftree =
     let open FT in
     Start { default = Drop;
@@ -152,32 +160,46 @@ module Main (C : CONSOLE) (MClock: MCLOCK) (N : NETWORK) (E : ETHERNET) (A : ARP
           }
 
   let start c m n e a i4 icmp4 tcp =
+    (* make a wrapper to call FT.decide and react to outcome *)
+    let react pdu =
+      match FT.decide ftree ~src_netif:Net0 rlu_ipv4 rlu_ipv6 pdu with
+      | (Drop, _) -> C.log c "Drop"
+      | (Forward, pdu) -> (
+          C.log c "Forward"
+        )
+      | (Echo_reply, _) -> (
+          C.log c "Echo_reply" <&>
+          match FT.PDU_to.pdu_to_icmpv4_pkt pdu with
+          | None -> Lwt.return_unit
+          | Some (ICMPv4_pkt { header; payload }) ->
+            let src = FT.ICMPv4.icmpv4_header_to_src_addr header in
+            let dst = FT.ICMPv4.icmpv4_header_to_dst_addr header in
+            let ICMPv4_payload_raw data = payload in
+            ICMP4.input icmp4 ~src ~dst data
+        )
+    in
     N.listen n ~header_size:Ethernet_wire.sizeof_ethernet
       (E.input
          ~arpv4:(A.input a)
          ~ipv4:(I4.input
                   ~tcp:(fun ~src:src_addr ~dst:dst_addr data ->
-                      let ipv4_header = FT.IPv4.make_ipv4_header ~src_addr ~dst_addr in
-                      let tcp_header = data_to_tcp_header data in
+                      let open FT.PDU in
+                      let header = FT.IPv4.make_ipv4_header ~src_addr ~dst_addr in
+                      let tcp_pdu = data_to_tcp_pdu data in
+                      let pdu = Layer3 (IPv4 (IPv4_pkt { header; payload = IPv4_payload_encap tcp_pdu })) in
                       Lwt.return_unit
                     )
                   ~udp:(fun ~src:src_addr ~dst:dst_addr data ->
-                      let ipv4_header = FT.IPv4.make_ipv4_header ~src_addr ~dst_addr in
                       Lwt.return_unit
                     )
                   ~default:(fun ~proto ~src:src_addr ~dst:dst_addr data ->
                       let open FT.PDU in
-                      let ipv4_header = FT.IPv4.make_ipv4_header ~src_addr ~dst_addr in
-                      let pdu = Layer3 (IPv4 (IPv4_pkt { header = ipv4_header; payload = IPv4_payload_raw data })) in
-                      match FT.decide ftree ~src_netif:Net0 rlu_ipv4 rlu_ipv6 pdu with
-                      | (Drop, _) -> C.log c "Drop"
-                      | (Forward, p) -> (
-                          C.log c "Forward" <&>
-                          C.log c (FT.To_debug_string.pdu_to_debug_string p) <&>
-                          ICMP4.input icmp4
-                            ~src:src_addr ~dst:dst_addr data
-                        )
-                      | (Echo_reply, _) -> C.log c "Echo_reply"
+                      if proto = 1 then
+                        let header = FT.ICMPv4.make_icmpv4_header ~src_addr ~dst_addr ICMPv4_Echo_request in
+                        let pdu = Layer3 (ICMPv4 (ICMPv4_pkt { header; payload = ICMPv4_payload_raw data })) in
+                        react pdu
+                      else
+                        Lwt.return ()
                     )
                   i4)
          ~ipv6:(fun _ -> Lwt.return_unit)
