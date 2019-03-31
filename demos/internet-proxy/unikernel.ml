@@ -11,20 +11,20 @@ module Main
     (ICMP4 : ICMPV4)
     (T : TCP) =
 struct
-  (* we define our environment implementation (or tree base) for the firewall tree *)
+  (* We define our environment implementation (or tree base) for the firewall tree *)
   module Base = struct
     let id x = x
 
-    (* decision can be arbitrarily defined, and is part of the outcome
+    (* Decision can be arbitrarily defined, and is part of the outcome
 
-       we only care about three decisions for now, we can always add more later
+       We only care about three decisions for now, we can always add more later
     *)
     type decision = Drop | Forward | Echo_reply
 
-    (* this is just for the firewall-tree library to distinguish between
+    (* This is just for the firewall-tree library to distinguish between
        interfaces
 
-       we only have one interface, so we use a single variant here
+       We only have one interface, so we use a single variant here
     *)
     type netif = Net0
 
@@ -44,7 +44,7 @@ struct
          provided by firewall-tree to determine whether to update header
          in-place or return a new header through make_header
 
-         in-place modification for headers is mainly useful for when header
+         In-place modification for headers is mainly useful for when header
          is a singular chunk of data
       *)
       let header_can_be_modified_inplace = false
@@ -65,7 +65,7 @@ struct
 
       let make_ipv4_header ~src_addr ~dst_addr = {src_addr; dst_addr}
 
-      (* since we set `header_can_be_modified_inplace` to false, the
+      (* Since we set `header_can_be_modified_inplace` to false, the
          following update header functions will not be invoked, so we can
          just leave a dummy implementation here
       *)
@@ -188,12 +188,12 @@ struct
     end
   end
 
-  (* we feed the environment implementation to the functor to get our tree *)
+  (* We feed the environment implementation to the functor to get our tree *)
   module FT = Firewall_tree.Make (Base)
-  (* we also want to selectors provided by firewall-tree *)
+  (* We also want to selectors provided by firewall-tree *)
   module Selectors = Firewall_tree.Selectors.Make (FT)
 
-  (* we define some helpers to help wrapping things into processable types
+  (* We define some helpers to help wrapping things into processable types
      for the tree
   *)
   module Helpers = struct
@@ -228,9 +228,12 @@ struct
     let get_icmpv4_ty data : FT.ICMPv4.icmpv4_type option =
       let open FT.ICMPv4 in
       let get_icmpv4_id_seq data : string * int =
-        let id = Printf.sprintf "%02X" (Icmpv4_wire.get_icmpv4_id data) in
+        let id_int = Icmpv4_wire.get_icmpv4_id data in
+        let id_raw = Marshal.to_string id_int [] in
+        let len = String.length id_raw in
+        let id_str = String.sub id_raw (len - 2) 2 in
         let seq = Icmpv4_wire.get_icmpv4_seq data in
-        (id, seq)
+        (id_str, seq)
       in
       match Icmpv4_wire.get_icmpv4_ty data |> Icmpv4_wire.int_to_ty with
       | None ->
@@ -268,44 +271,59 @@ struct
               ICMPv4_Information_reply {id; seq} )
   end
 
-  (* we don't actually need Routing Logic Unit (RLU) here,
-     and they are not fully functional yet,
-     but they are mandatory for the decide function as
+  (* We don't actually need Routing Logic Unit (RLU) here,
+     and they are not fully functional yet
+
+     But they are mandatory for the decide function as
      RLU is necessary to determine egress network interface
      and next-hop address etc, which may be used in the policy
   *)
   let rlu_ipv4 = FT.RLU_IPv4.make ()
   let rlu_ipv6 = FT.RLU_IPv6.make ()
 
-  (* finally we define our policy through firewall tree
+  (* Finally we define our policy through firewall tree
 
-     see the diagram for a clearer representation
+     See the diagram for a clearer representation
   *)
   let ftree =
     let open FT in
     let open Pred in
+    let open Selectors in
     let tracker = Conn_track.make ~max_conn:1000 ~init_size:10 ~timeout_ms:30_000L in
     Start
       { default = Drop
       ; next =
           Select
-            (Selectors.make_select_first_match
-               (* this selects the first branch with a satisfied predicate
+            (make_select_first_match
+               (* This selects the first branch with a satisfied predicate
 
-                  we use the same tracker for all predicates so they share
+                  We use the same connection tracker for all predicates so they share
                   the same information, which is what we want
 
-                  `Invalid` connection is implicitly dropped
+                  Connection trackers are bidirectional, and will lookup which one is the
+                  initiator and which one is the responder if needed for a protocol (e.g. TCP),
+                  so we don't have to worry too much about placement
 
-                  selectors can drop a pdu and result in default decision
+                  `Invalid` connection is implicitly dropped here
+
+                  Selectors can drop a pdu, which results in default decision,
                   by picking a negative or out of bound branch index
                *)
-               [| Conn_state_eq { tracker; target_state = Conn_track.New },
+               [| Conn_state_eq { tracker; target_state = Conn_track.New }, (* We consider all new traffic to be from side A to B during translation *)
                   Select (
-                    Selectors.make_select_first_match
-                      [|                    |]
+                    make_select_first_match [| Contains_ICMPv4, Select (make_filter ICMPv4_ty_eq_Echo_request
+                                                                          (* We reply every other ECHO request we receive *)
+                                                                          (Select (make_pdu_based_load_balancer_round_robin [| End Drop
+                                                                                                                             ; End Echo_reply
+                                                                                                                            |])))
+                                             ; Contains_TCP, Select (
+                                                 (* We block HTTP traffic naively, and translate supposedly HTTPS traffic *)
+                                                 make_select_first_match [| TCP_dst_port_eq 80, End Drop
+                                                                         |]
+                                               )
+                                            |]
                   )
-                ; Conn_state_eq { tracker; target_state = Conn_track.Established },
+                ; Conn_state_eq { tracker; target_state = Conn_track.Established }, (* We consider all established traffic to be from side B to A during translation *)
                   Select (
                     Selectors.make_select_first_match
                       [|                    |]
@@ -315,24 +333,32 @@ struct
       }
 
   let start c m n e a i4 icmp4 tcp =
-    (* make a wrapper to call FT.decide and react to outcome *)
+    (* Make a wrapper to call FT.decide and react to outcome *)
     let react pdu =
-      match FT.decide ftree ~src_netif:Net0 rlu_ipv4 rlu_ipv6 pdu with
-      | Drop, _ ->
-          C.log c "Drop"
-      | Forward, pdu ->
-          C.log c "Forward"
-      | Echo_reply, _ -> (
-          C.log c "Echo_reply"
-          <&>
-          match FT.PDU_to.ipv4_header pdu, FT.PDU_to.icmpv4_pkt pdu with
-          | Some ipv4_header, Some (ICMPv4_pkt {header; payload}) ->
-              let src = FT.IPv4.ipv4_header_to_src_addr ipv4_header in
-              let dst = FT.IPv4.ipv4_header_to_dst_addr ipv4_header in
-              let (ICMPv4_payload_raw data) = payload in
-              ICMP4.input icmp4 ~src ~dst data
-          | _ -> Lwt.return_unit
-        )
+      (* Print out PDU for debugging/demo purpose *)
+      C.log c (
+        "Received pdu\n"
+        ^
+        (FT.To_debug_string.pdu pdu)
+      ) >>=
+      (fun _ ->
+         match FT.decide ftree ~src_netif:Net0 rlu_ipv4 rlu_ipv6 pdu with
+         | Drop, _ ->
+           C.log c "Decision : Drop\n"
+         | Forward, pdu ->
+           C.log c "Decision : Forward\n"
+         | Echo_reply, _ -> (
+             C.log c "Decision : Echo_reply\n"
+             <&>
+             match FT.PDU_to.ipv4_header pdu, FT.PDU_to.icmpv4_pkt pdu with
+             | Some ipv4_header, Some (ICMPv4_pkt {header; payload}) ->
+               let src = FT.IPv4.ipv4_header_to_src_addr ipv4_header in
+               let dst = FT.IPv4.ipv4_header_to_dst_addr ipv4_header in
+               let (ICMPv4_payload_raw data) = payload in
+               ICMP4.input icmp4 ~src ~dst data
+             | _ -> Lwt.return_unit
+           )
+      )
     in
     N.listen n ~header_size:Ethernet_wire.sizeof_ethernet
       (E.input ~arpv4:(A.input a)
