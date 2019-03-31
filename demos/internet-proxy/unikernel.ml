@@ -99,23 +99,19 @@ struct
         | ICMPv4_Information_reply of {id: string; seq: int}
 
       type icmpv4_header =
-        {src_addr: ipv4_addr; dst_addr: ipv4_addr; ty: icmpv4_type}
+        {ty: icmpv4_type}
 
       type icmpv4_payload_raw = Cstruct.t
 
       let header_can_be_modified_inplace = false
 
-      let icmpv4_header_to_src_addr header = header.src_addr
-
-      let icmpv4_header_to_dst_addr header = header.dst_addr
-
       let icmpv4_header_to_icmpv4_type header = header.ty
 
-      let make_icmpv4_header ~src_addr ~dst_addr ty = {src_addr; dst_addr; ty}
+      let make_icmpv4_header ty = {ty}
 
-      let update_icmpv4_header_inplace ~src_addr:_ ~dst_addr:_ _ty _header = ()
+      let update_icmpv4_header_inplace _ty _header = ()
 
-      let update_icmpv4_header_inplace_byte_string ~src_addr:_ ~dst_addr:_ _ty
+      let update_icmpv4_header_inplace_byte_string _ty
           _header =
         ()
 
@@ -288,7 +284,7 @@ struct
   let ftree =
     let open FT in
     let open Pred in
-    let tracker = Conn_track.make ~max_conn:1000 ~timeout_ms:30_000L in
+    let tracker = Conn_track.make ~max_conn:1000 ~init_size:10 ~timeout_ms:30_000L in
     Start
       { default = Drop
       ; next =
@@ -305,11 +301,15 @@ struct
                   by picking a negative or out of bound branch index
                *)
                [| Conn_state_eq { tracker; target_state = Conn_track.New },
-                  Selectors.make_select_first_match
-                    [| Contains_ICMPv4,
-
-                    |]
-                ; Conn_state_eq { tracker; target_state = Conn_track.Established }
+                  Select (
+                    Selectors.make_select_first_match
+                      [|                    |]
+                  )
+                ; Conn_state_eq { tracker; target_state = Conn_track.Established },
+                  Select (
+                    Selectors.make_select_first_match
+                      [|                    |]
+                  )
                |]
             )
       }
@@ -325,14 +325,14 @@ struct
       | Echo_reply, _ -> (
           C.log c "Echo_reply"
           <&>
-          match FT.PDU_to.icmpv4_pkt pdu with
-          | None ->
-              Lwt.return_unit
-          | Some (ICMPv4_pkt {header; payload}) ->
-              let src = FT.ICMPv4.icmpv4_header_to_src_addr header in
-              let dst = FT.ICMPv4.icmpv4_header_to_dst_addr header in
+          match FT.PDU_to.ipv4_header pdu, FT.PDU_to.icmpv4_pkt pdu with
+          | Some ipv4_header, Some (ICMPv4_pkt {header; payload}) ->
+              let src = FT.IPv4.ipv4_header_to_src_addr ipv4_header in
+              let dst = FT.IPv4.ipv4_header_to_dst_addr ipv4_header in
               let (ICMPv4_payload_raw data) = payload in
-              ICMP4.input icmp4 ~src ~dst data )
+              ICMP4.input icmp4 ~src ~dst data
+          | _ -> Lwt.return_unit
+        )
     in
     N.listen n ~header_size:Ethernet_wire.sizeof_ethernet
       (E.input ~arpv4:(A.input a)
@@ -341,7 +341,7 @@ struct
               ~tcp:(fun ~src:src_addr ~dst:dst_addr data ->
                 let open FT.PDU in
                 let header = FT.IPv4.make_ipv4_header ~src_addr ~dst_addr in
-                let tcp_pdu = data_to_tcp_pdu data in
+                let tcp_pdu = Helpers.data_to_tcp_pdu data in
                 let pdu =
                   Layer3
                     (IPv4
@@ -351,7 +351,7 @@ struct
               ~udp:(fun ~src:src_addr ~dst:dst_addr data ->
                 let open FT.PDU in
                 let header = FT.IPv4.make_ipv4_header ~src_addr ~dst_addr in
-                let udp_pdu = data_to_udp_pdu data in
+                let udp_pdu = Helpers.data_to_udp_pdu data in
                 let pdu =
                   Layer3
                     (IPv4
@@ -362,18 +362,28 @@ struct
                 let open FT.PDU in
                 if proto = 1 then
                   (* only care about ICMP *)
-                  match get_icmpv4_ty data with
+                  match Helpers.get_icmpv4_ty data with
                   | None ->
                       Lwt.return_unit
                   | Some ty ->
-                      let header =
-                        FT.ICMPv4.make_icmpv4_header ~src_addr ~dst_addr ty
+                      let ipv4_header =
+                        FT.IPv4.make_ipv4_header ~src_addr ~dst_addr
+                      in
+                      let icmpv4_pkt =
+                        let header =
+                          FT.ICMPv4.make_icmpv4_header ty
+                        in
+                        let payload =
+                          ICMPv4_payload_raw data
+                        in
+                        ICMPv4_pkt {header; payload}
                       in
                       let pdu =
                         Layer3
-                          (ICMPv4
-                             (ICMPv4_pkt
-                                {header; payload= ICMPv4_payload_raw data}))
+                          (IPv4
+                             (IPv4_pkt
+                                {header  = ipv4_header;
+                                 payload = IPv4_payload_icmp icmpv4_pkt}))
                       in
                       react pdu
                 else Lwt.return_unit )
