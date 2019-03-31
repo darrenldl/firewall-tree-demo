@@ -146,6 +146,18 @@ module Main (C : CONSOLE) (MClock: MCLOCK) (N : NETWORK) (E : ETHERNET) (A : ARP
     let data_raw = Cstruct.shift data data_offset in
     TCP (TCP_pdu { header; payload = TCP_payload_raw data_raw })
 
+  let data_to_udp_header data =
+    let src_port = Udp_wire.get_udp_source_port data in
+    let dst_port = Udp_wire.get_udp_dest_port data in
+    FT.UDP.make_udp_header ~src_port ~dst_port
+
+  let data_to_udp_pdu data =
+    let open FT.PDU in
+    let header = data_to_udp_header data in
+    let data_offset = 8 in
+    let data_raw = Cstruct.shift data data_offset in
+    UDP (UDP_pdu { header; payload = UDP_payload_raw data_raw })
+
   let rlu_ipv4 = FT.RLU_IPv4.make ()
   let rlu_ipv6 = FT.RLU_IPv6.make ()
 
@@ -187,10 +199,14 @@ module Main (C : CONSOLE) (MClock: MCLOCK) (N : NETWORK) (E : ETHERNET) (A : ARP
                       let header = FT.IPv4.make_ipv4_header ~src_addr ~dst_addr in
                       let tcp_pdu = data_to_tcp_pdu data in
                       let pdu = Layer3 (IPv4 (IPv4_pkt { header; payload = IPv4_payload_encap tcp_pdu })) in
-                      Lwt.return_unit
+                      react pdu
                     )
                   ~udp:(fun ~src:src_addr ~dst:dst_addr data ->
-                      Lwt.return_unit
+                      let open FT.PDU in
+                      let header = FT.IPv4.make_ipv4_header ~src_addr ~dst_addr in
+                      let udp_pdu = data_to_udp_pdu data in
+                      let pdu = Layer3 (IPv4 (IPv4_pkt { header; payload = IPv4_payload_encap udp_pdu })) in
+                      react pdu
                     )
                   ~default:(fun ~proto ~src:src_addr ~dst:dst_addr data ->
                       let open FT.PDU in
@@ -203,5 +219,5 @@ module Main (C : CONSOLE) (MClock: MCLOCK) (N : NETWORK) (E : ETHERNET) (A : ARP
                     )
                   i4)
          ~ipv6:(fun _ -> Lwt.return_unit)
-         e) >>= (fun _ -> Lwt.return_unit)
+         e)
 end
