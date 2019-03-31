@@ -11,10 +11,13 @@ module Main (C : CONSOLE) (MClock: MCLOCK) (N : NETWORK) (E : ETHERNET) (A : ARP
 
     let cur_time_ms () = Int64.div (MClock.elapsed_ns ()) 1000L
 
+    (* we don't care about ethernet frames, use dummy implementation *)
     module Ether = Firewall_tree.Mock_tree_base.Ether
 
     module IPv4 = struct
       type ipv4_addr = Ipaddr.V4.t
+
+      let header_can_be_modified_inplace = false
 
       type ipv4_header = {
         src_addr : ipv4_addr;
@@ -34,6 +37,11 @@ module Main (C : CONSOLE) (MClock: MCLOCK) (N : NETWORK) (E : ETHERNET) (A : ARP
 
       let make_ipv4_header ~src_addr ~dst_addr = { src_addr; dst_addr }
 
+      let update_ipv4_header_inplace ~src_addr:_ ~dst_addr:_ _header = ()
+
+      let update_ipv4_header_inplace_byte_string ~src_addr:_ ~dst_addr:_ _header =
+        ()
+
       let ipv4_payload_raw_to_byte_string c = Cstruct.to_string c
       let byte_string_to_ipv4_payload_raw s = Cstruct.of_string s
     end
@@ -44,15 +52,24 @@ module Main (C : CONSOLE) (MClock: MCLOCK) (N : NETWORK) (E : ETHERNET) (A : ARP
       open IPv4
 
       type icmpv4_type =
-        | ICMPv4_Echo_reply
-        | ICMPv4_Echo_request
-        | ICMPv4_Timestamp_request
-        | ICMPv4_Timestamp_reply
+        | ICMPv4_Echo_reply of {id : string; seq : int}
+        | ICMPv4_Destination_unreachable
+        | ICMPv4_Source_quench
+        | ICMPv4_Redirect
+        | ICMPv4_Echo_request of {id : string; seq : int}
+        | ICMPv4_Time_exceeded
+        | ICMPv4_Parameter_problem
+        | ICMPv4_Timestamp_request of {id : string; seq : int}
+        | ICMPv4_Timestamp_reply of {id : string; seq : int}
+        | ICMPv4_Information_request of {id : string; seq : int}
+        | ICMPv4_Information_reply of {id : string; seq : int}
 
       type icmpv4_header =
         {src_addr : ipv4_addr; dst_addr : ipv4_addr; ty : icmpv4_type}
 
       type icmpv4_payload_raw = Cstruct.t
+
+      let header_can_be_modified_inplace = false
 
       let icmpv4_header_to_src_addr header = header.src_addr
 
@@ -62,6 +79,12 @@ module Main (C : CONSOLE) (MClock: MCLOCK) (N : NETWORK) (E : ETHERNET) (A : ARP
 
       let make_icmpv4_header ~src_addr ~dst_addr ty =
         {src_addr; dst_addr; ty}
+
+      let update_icmpv4_header_inplace ~src_addr:_ ~dst_addr:_ _ty _header = ()
+
+      let update_icmpv4_header_inplace_byte_string ~src_addr:_ ~dst_addr:_ _ty
+          _header =
+        ()
 
       let icmpv4_payload_raw_to_byte_string c = Cstruct.to_string c
 
@@ -83,6 +106,8 @@ module Main (C : CONSOLE) (MClock: MCLOCK) (N : NETWORK) (E : ETHERNET) (A : ARP
 
       type tcp_payload_raw = Cstruct.t
 
+      let header_can_be_modified_inplace = false
+
       let compare_tcp_port = compare
 
       let tcp_header_to_src_port header = header.src_port
@@ -100,6 +125,10 @@ module Main (C : CONSOLE) (MClock: MCLOCK) (N : NETWORK) (E : ETHERNET) (A : ARP
       let make_tcp_header ~src_port ~dst_port ~ack ~rst ~syn ~fin =
         {src_port; dst_port; ack; rst; syn; fin}
 
+      let update_tcp_header_inplace ~src_port:_ ~dst_port:_ ~ack:_ ~rst:_ ~syn:_
+          ~fin:_ _header =
+        ()
+
       let tcp_payload_raw_to_byte_string c = Cstruct.to_string c
 
       let byte_string_to_tcp_payload_raw s = Cstruct.of_string s
@@ -112,6 +141,8 @@ module Main (C : CONSOLE) (MClock: MCLOCK) (N : NETWORK) (E : ETHERNET) (A : ARP
 
       type udp_payload_raw = Cstruct.t
 
+      let header_can_be_modified_inplace = false
+
       let compare_udp_port = compare
 
       let udp_header_to_src_port header = header.src_port
@@ -119,6 +150,8 @@ module Main (C : CONSOLE) (MClock: MCLOCK) (N : NETWORK) (E : ETHERNET) (A : ARP
       let udp_header_to_dst_port header = header.dst_port
 
       let make_udp_header ~src_port ~dst_port = {src_port; dst_port}
+
+      let update_udp_header_inplace ~src_port:_ ~dst_port:_ _header = ()
 
       let udp_payload_raw_to_byte_string c = Cstruct.to_string c
 
@@ -157,6 +190,12 @@ module Main (C : CONSOLE) (MClock: MCLOCK) (N : NETWORK) (E : ETHERNET) (A : ARP
     let data_offset = 8 in
     let data_raw = Cstruct.shift data data_offset in
     UDP (UDP_pdu { header; payload = UDP_payload_raw data_raw })
+
+  let get_icmpv4_id_seq data : string * int =
+    let id = Printf.sprintf "%02X" (Icmpv4_wire.get_icmpv4_id data) in
+    let seq = Icmpv4_wire.get_icmpv4_seq data in
+    (id, seq)
+
 
   let rlu_ipv4 = FT.RLU_IPv4.make ()
   let rlu_ipv6 = FT.RLU_IPv6.make ()
@@ -211,11 +250,35 @@ module Main (C : CONSOLE) (MClock: MCLOCK) (N : NETWORK) (E : ETHERNET) (A : ARP
                   ~default:(fun ~proto ~src:src_addr ~dst:dst_addr data ->
                       let open FT.PDU in
                       if proto = 1 then
-                        let header = FT.ICMPv4.make_icmpv4_header ~src_addr ~dst_addr ICMPv4_Echo_request in
-                        let pdu = Layer3 (ICMPv4 (ICMPv4_pkt { header; payload = ICMPv4_payload_raw data })) in
-                        react pdu
+                        let open FT.ICMPv4 in
+                        match Icmpv4_wire.get_icmpv4_ty data |> Icmpv4_wire.int_to_ty with
+                          | None -> Lwt.return_unit
+                          | Some ty ->
+                            let ty =
+                              match ty with
+                              | Echo_reply ->
+                                let (id, seq) = get_icmpv4_id_seq data in ICMPv4_Echo_reply {id; seq}
+                              | Destination_unreachable -> ICMPv4_Destination_unreachable
+                              | Source_quench -> ICMPv4_Source_quench
+                              | Redirect -> ICMPv4_Redirect
+                              | Echo_request ->
+                                let (id, seq) = get_icmpv4_id_seq data in ICMPv4_Echo_request {id; seq}
+                              | Time_exceeded -> ICMPv4_Time_exceeded
+                              | Parameter_problem -> ICMPv4_Parameter_problem
+                              | Timestamp_request ->
+                                let (id, seq) = get_icmpv4_id_seq data in ICMPv4_Timestamp_request {id; seq}
+                              | Timestamp_reply ->
+                                let (id, seq) = get_icmpv4_id_seq data in ICMPv4_Timestamp_reply {id; seq}
+                              | Information_request ->
+                                let (id, seq) = get_icmpv4_id_seq data in ICMPv4_Information_request {id; seq}
+                              | Information_reply ->
+                                let (id, seq) = get_icmpv4_id_seq data in ICMPv4_Information_reply {id; seq}
+                            in
+                            let header = FT.ICMPv4.make_icmpv4_header ~src_addr ~dst_addr ty in
+                            let pdu = Layer3 (ICMPv4 (ICMPv4_pkt { header; payload = ICMPv4_payload_raw data })) in
+                            react pdu
                       else
-                        Lwt.return ()
+                        Lwt.return_unit
                     )
                   i4)
          ~ipv6:(fun _ -> Lwt.return_unit)
