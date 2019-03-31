@@ -169,7 +169,7 @@ module Main (C : CONSOLE) (MClock: MCLOCK) (N : NETWORK) (E : ETHERNET) (A : ARP
         )
       | (Echo_reply, _) -> (
           C.log c "Echo_reply" <&>
-          match FT.PDU_to.pdu_to_icmpv4_pkt pdu with
+          match FT.PDU_to.icmpv4_pkt pdu with
           | None -> Lwt.return_unit
           | Some (ICMPv4_pkt { header; payload }) ->
             let src = FT.ICMPv4.icmpv4_header_to_src_addr header in
