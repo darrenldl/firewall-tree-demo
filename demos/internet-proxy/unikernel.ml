@@ -40,16 +40,7 @@ struct
     module IPv4 = struct
       type ipv4_addr = Ipaddr.V4.t
 
-      (* `header_can_be_modified_inplace` is used by update_header functions
-         provided by firewall-tree to determine whether to update header
-         in-place or return a new header through make_header
-
-         In-place modification for headers is mainly useful for when header
-         is a singular chunk of data
-      *)
-      let header_can_be_modified_inplace = false
-
-      type ipv4_header = {src_addr: ipv4_addr; dst_addr: ipv4_addr}
+      type ipv4_header = {mutable src_addr: ipv4_addr; mutable dst_addr: ipv4_addr}
 
       type ipv4_payload_raw = Cstruct.t
 
@@ -63,17 +54,42 @@ struct
 
       let ipv4_header_to_dst_addr r = r.dst_addr
 
-      let make_ipv4_header ~src_addr ~dst_addr = {src_addr; dst_addr}
+      (* To reduce complexity of PDU manipulation, firewall-tree does not
+         require a full-blown make header function that produces a fully valid header
 
-      (* Since we set `header_can_be_modified_inplace` to false, the
-         following update header functions will not be invoked, so we can
-         just leave a dummy implementation here
+         Instead, we are only required to provide a update header function which provides
+         access to several fields rather than all, and a dummy header function for testing
+         purposes only
+
+         Header types can be mutable or immutable (update header functions return a copy of header anyway),
+         we're picking mutable here as it allows easier modification
       *)
-      let update_ipv4_header_inplace ~src_addr:_ ~dst_addr:_ _header = ()
+      let make_dummy_ipv4_header () =
+        {src_addr = Ipaddr.V4.make 192 168 0 1;
+         dst_addr = Ipaddr.V4.make 192 168 0 2}
 
-      let update_ipv4_header_inplace_byte_string ~src_addr:_ ~dst_addr:_
-          _header =
-        ()
+      let update_ipv4_header_ ~src_addr ~dst_addr header =
+        (match src_addr with
+         | None -> ()
+         | Some x -> header.src_addr <- x
+        );
+        (match dst_addr with
+         | None -> ()
+         | Some x -> header.dst_addr <- x
+        );
+        header
+
+      let update_ipv4_header_byte_string_ ~src_addr ~dst_addr
+          header =
+        (match src_addr with
+         | None -> ()
+         | Some x -> header.src_addr <- Ipaddr.V4.of_bytes_exn x
+        );
+        (match dst_addr with
+         | None -> ()
+         | Some x -> header.dst_addr <- Ipaddr.V4.of_bytes_exn x
+        );
+        header
 
       let ipv4_payload_raw_to_byte_string c = Cstruct.to_string c
 
@@ -123,15 +139,9 @@ struct
     module ICMPv6 = Firewall_tree.Mock_tree_base.ICMPv6
 
     module TCP = struct
-      type tcp_port = int
+      type tcp_port = Cstruct.uint16
 
-      type tcp_header =
-        { src_port: tcp_port
-        ; dst_port: tcp_port
-        ; ack: bool
-        ; rst: bool
-        ; syn: bool
-        ; fin: bool }
+      type tcp_header = Cstruct.t
 
       type tcp_payload_raw = Cstruct.t
 
@@ -139,53 +149,67 @@ struct
 
       let compare_tcp_port = compare
 
-      let tcp_header_to_src_port header = header.src_port
+      let tcp_header_to_src_port = Tcp.Tcp_wire.get_tcp_src_port
 
-      let tcp_header_to_dst_port header = header.dst_port
+      let tcp_header_to_dst_port = Tcp.Tcp_wire.get_tcp_dst_port
 
-      let tcp_header_to_ack_flag header = header.ack
+      let tcp_header_to_ack_flag = Tcp.Tcp_wire.get_ack
 
-      let tcp_header_to_rst_flag header = header.rst
+      let tcp_header_to_rst_flag = Tcp.Tcp_wire.get_rst
 
-      let tcp_header_to_syn_flag header = header.syn
+      let tcp_header_to_syn_flag = Tcp.Tcp_wire.get_syn
 
-      let tcp_header_to_fin_flag header = header.fin
+      let tcp_header_to_fin_flag = Tcp.Tcp_wire.get_fin
 
-      let make_tcp_header ~src_port ~dst_port ~ack ~rst ~syn ~fin =
-        {src_port; dst_port; ack; rst; syn; fin}
+      let make_dummy_tcp_header () =
+        Cstruct.create 20
 
-      let update_tcp_header_inplace ~src_port:_ ~dst_port:_ ~ack:_ ~rst:_
-          ~syn:_ ~fin:_ _header =
-        ()
+      let update_tcp_header_ ~src_port ~dst_port ~ack ~rst ~syn ~fin header =
+        let open Tcp.Tcp_wire in
+        (match src_port with
+         | None -> ()
+         | Some x -> set_tcp_src_port header x);
+        (match dst_port with
+         | None -> ()
+         | Some x -> set_tcp_dst_port header x);
+        let fin = match fin with
+          | None -> get_fin header
+          | Some x -> x
+        in
+        let syn = match syn with
+          | None -> get_syn header
+          | Some x -> x
+        in
+        let rst = match rst with
+          | None -> get_rst header
+          | Some x -> x
+        in
+        let psh = get_psh header in
+        let ack = match ack with
+          | None -> get_ack header
+          | Some x -> x
+        in
+        let urg = get_urg header in
+        let ece = get_ece header in
+        let cwr = get_cwr header in
+
+        set_tcp_flags header 0;
+        set_fin header fin;
+        set_syn header syn;
+        set_rst header rst;
+        set_psh header psh;
+        set_urg header urg;
+        set_ece header ece;
+        set_cwr header cwr;
+
+        header
 
       let tcp_payload_raw_to_byte_string c = Cstruct.to_string c
 
       let byte_string_to_tcp_payload_raw s = Cstruct.of_string s
     end
 
-    module UDP = struct
-      type udp_port = int
-
-      type udp_header = {src_port: udp_port; dst_port: udp_port}
-
-      type udp_payload_raw = Cstruct.t
-
-      let header_can_be_modified_inplace = false
-
-      let compare_udp_port = compare
-
-      let udp_header_to_src_port header = header.src_port
-
-      let udp_header_to_dst_port header = header.dst_port
-
-      let make_udp_header ~src_port ~dst_port = {src_port; dst_port}
-
-      let update_udp_header_inplace ~src_port:_ ~dst_port:_ _header = ()
-
-      let udp_payload_raw_to_byte_string c = Cstruct.to_string c
-
-      let byte_string_to_udp_payload_raw s = Cstruct.of_string s
-    end
+    module UDP = Firewall_tree.Mock_tree_base.UDP
   end
 
   (* We feed the environment implementation to the functor to get our tree *)
