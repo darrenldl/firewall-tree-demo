@@ -19,7 +19,7 @@ struct
 
        We only care about three decisions for now, we can always add more later
     *)
-    type decision = Drop | Forward | Echo_reply
+    type decision = Drop | Forward | Echo_reply | Test
 
     (* This is just for the firewall-tree library to distinguish between
        interfaces
@@ -373,6 +373,7 @@ struct
                                   |]
              ; Conn_state_eq { tracker; target_state = Conn_track.Established }, (* We consider all established traffic to be from side B to A during translation *)
                side_B_to_A_branch
+             ; True, End Test
             |]
       }
       in
@@ -420,6 +421,7 @@ struct
                ICMP4.input icmp4 ~src ~dst data
              | _ -> Lwt.return_unit
            )
+         | Test, _ -> C.log c "Decision : Test\n"
       )
     in
     N.listen n ~header_size:Ethernet_wire.sizeof_ethernet
