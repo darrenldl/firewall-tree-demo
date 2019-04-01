@@ -369,25 +369,18 @@ struct
              C.log c "Decision : Forward\n"
              <&>
              match FT.PDU_to.ipv4_header pdu, FT.PDU_to.tcp_pdu pdu with
-             | Some ipv4_header, Some (TCP_pdu {header = tcp_header; payload = TCP_payload_raw data }) -> (
+             | Some ipv4_header, Some (TCP_pdu {header = tcp_header; payload = TCP_payload_raw _ }) -> (
                  let src_addr = FT.IPv4.ipv4_header_to_src_addr ipv4_header in
                  let dst_addr = FT.IPv4.ipv4_header_to_dst_addr ipv4_header in
-                 let src_port = FT.TCP.tcp_header_to_src_port tcp_header in
-                 let dst_port = FT.TCP.tcp_header_to_dst_port tcp_header in
                  (* N.write n ~size:(N.mtu net + Ethernet_wire.sizeof_ethernet) (fun buffer ->
                   *   ) *)
-                 let data_len = Cstruct.len data in
-                 C.log c (Printf.sprintf "data length : %d" data_len) >>=
-                 (fun _ ->
-                    let headerf buffer =
-                      Tcp.Tcp_wire.set_tcp_src_port buffer src_port;
-                      Tcp.Tcp_wire.set_tcp_dst_port buffer dst_port;
-                      Tcp.Tcp_wire.set_data_offset buffer Tcp.Tcp_wire.sizeof_tcp;
-                      Tcp.Tcp_wire.sizeof_tcp + data_len
-                    in
-                    I4.write i4 ~src:src_addr dst_addr `TCP ~size:(Tcp.Tcp_wire.sizeof_tcp + data_len) headerf [data] >>=
-                    (fun _ -> Lwt.return_unit)
-                 )
+                 let tcp_header_len = Cstruct.len tcp_header in
+                 let headerf buffer =
+                   Cstruct.blit tcp_header 0 buffer 0 tcp_header_len;
+                   tcp_header_len
+                 in
+                 I4.write i4 ~src:src_addr dst_addr `TCP ~size:(Cstruct.len tcp_header) headerf [] >>=
+                 (fun _ -> Lwt.return_unit)
                )
              | _, _ -> Lwt.return_unit
            )
