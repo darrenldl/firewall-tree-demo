@@ -115,7 +115,7 @@ struct
         | ICMPv4_Information_reply of {id: string; seq: int}
 
       type icmpv4_header =
-        {ty: icmpv4_type}
+        {mutable ty: icmpv4_type}
 
       type icmpv4_payload_raw = Cstruct.t
 
@@ -123,13 +123,12 @@ struct
 
       let icmpv4_header_to_icmpv4_type header = header.ty
 
-      let make_icmpv4_header ty = {ty}
+      let make_dummy_icmpv4_header ty =
+        {ty = ICMPv4_Echo_reply {id = "\x01\x01"; seq = 0}}
 
-      let update_icmpv4_header_inplace _ty _header = ()
-
-      let update_icmpv4_header_inplace_byte_string _ty
-          _header =
-        ()
+      let update_icmpv4_header_ ty header =
+        (match ty with None -> () | Some x -> header.ty <- x);
+        header
 
       let icmpv4_payload_raw_to_byte_string c = Cstruct.to_string c
 
@@ -194,13 +193,13 @@ struct
         let cwr = get_cwr header in
 
         set_tcp_flags header 0;
-        set_fin header fin;
-        set_syn header syn;
-        set_rst header rst;
-        set_psh header psh;
-        set_urg header urg;
-        set_ece header ece;
-        set_cwr header cwr;
+        if fin then set_fin header;
+        if syn then set_syn header;
+        if rst then set_rst header;
+        if psh then set_psh header;
+        if urg then set_urg header;
+        if ece then set_ece header;
+        if cwr then set_cwr header;
 
         header
 
@@ -224,33 +223,12 @@ struct
      for the tree
   *)
   module Helpers = struct
-    let data_to_tcp_header data =
-      let src_port = Tcp.Tcp_wire.get_tcp_src_port data in
-      let dst_port = Tcp.Tcp_wire.get_tcp_dst_port data in
-      let ack = Tcp.Tcp_wire.get_ack data in
-      let rst = Tcp.Tcp_wire.get_rst data in
-      let syn = Tcp.Tcp_wire.get_syn data in
-      let fin = Tcp.Tcp_wire.get_fin data in
-      FT.TCP.make_tcp_header ~src_port ~dst_port ~ack ~rst ~syn ~fin
-
     let data_to_tcp_pdu data =
       let open FT.PDU in
-      let header = data_to_tcp_header data in
+      let header = data in
       let data_offset = Tcp.Tcp_wire.get_data_offset data in
       let data_raw = Cstruct.shift data data_offset in
       TCP (TCP_pdu {header; payload= TCP_payload_raw data_raw})
-
-    let data_to_udp_header data =
-      let src_port = Udp_wire.get_udp_source_port data in
-      let dst_port = Udp_wire.get_udp_dest_port data in
-      FT.UDP.make_udp_header ~src_port ~dst_port
-
-    let data_to_udp_pdu data =
-      let open FT.PDU in
-      let header = data_to_udp_header data in
-      let data_offset = 8 in
-      let data_raw = Cstruct.shift data data_offset in
-      UDP (UDP_pdu {header; payload= UDP_payload_raw data_raw})
 
     let get_icmpv4_ty data : FT.ICMPv4.icmpv4_type option =
       let open FT.ICMPv4 in
@@ -432,7 +410,8 @@ struct
            (I4.input
               ~tcp:(fun ~src:src_addr ~dst:dst_addr data ->
                 let open FT.PDU in
-                let header = FT.IPv4.make_ipv4_header ~src_addr ~dst_addr in
+                let open Base.IPv4 in
+                let header = {src_addr; dst_addr} in
                 let tcp_pdu = Helpers.data_to_tcp_pdu data in
                 let pdu =
                   Layer3
@@ -440,18 +419,11 @@ struct
                        (IPv4_pkt {header; payload= IPv4_payload_encap tcp_pdu}))
                 in
                 react pdu )
-              ~udp:(fun ~src:src_addr ~dst:dst_addr data ->
-                let open FT.PDU in
-                let header = FT.IPv4.make_ipv4_header ~src_addr ~dst_addr in
-                let udp_pdu = Helpers.data_to_udp_pdu data in
-                let pdu =
-                  Layer3
-                    (IPv4
-                       (IPv4_pkt {header; payload= IPv4_payload_encap udp_pdu}))
-                in
-                react pdu )
+              ~udp:(fun ~src:src_addr ~dst:dst_addr data -> Lwt.return_unit)
               ~default:(fun ~proto ~src:src_addr ~dst:dst_addr data ->
                 let open FT.PDU in
+                let open Base.IPv4 in
+                let open Base.ICMPv4 in
                 if proto = 1 then
                   (* only care about ICMP *)
                   match Helpers.get_icmpv4_ty data with
@@ -459,11 +431,11 @@ struct
                       Lwt.return_unit
                   | Some ty ->
                       let ipv4_header =
-                        FT.IPv4.make_ipv4_header ~src_addr ~dst_addr
+                        {src_addr; dst_addr}
                       in
                       let icmpv4_pkt =
                         let header =
-                          FT.ICMPv4.make_icmpv4_header ty
+                          { ty }
                         in
                         let payload =
                           ICMPv4_payload_raw data
