@@ -140,7 +140,7 @@ struct
     module TCP = struct
       type tcp_port = Cstruct.uint16
 
-      type tcp_header = Cstruct.t
+      type tcp_header = Tcp.Tcp_packet.t
 
       type tcp_payload_raw = Cstruct.t
 
@@ -148,60 +148,82 @@ struct
 
       let compare_tcp_port = compare
 
-      let tcp_header_to_src_port = Tcp.Tcp_wire.get_tcp_src_port
+      open Tcp.Tcp_packet
 
-      let tcp_header_to_dst_port = Tcp.Tcp_wire.get_tcp_dst_port
+      let tcp_header_to_src_port h = h.src_port
 
-      let tcp_header_to_ack_flag = Tcp.Tcp_wire.get_ack
+      let tcp_header_to_dst_port h = h.dst_port
 
-      let tcp_header_to_rst_flag = Tcp.Tcp_wire.get_rst
+      let tcp_header_to_ack_flag h = h.ack
 
-      let tcp_header_to_syn_flag = Tcp.Tcp_wire.get_syn
+      let tcp_header_to_rst_flag h = h.rst
 
-      let tcp_header_to_fin_flag = Tcp.Tcp_wire.get_fin
+      let tcp_header_to_syn_flag h = h.syn
+
+      let tcp_header_to_fin_flag h = h.fin
 
       let make_dummy_tcp_header () =
-        Cstruct.create 20
+        {
+          urg = false;
+          ack = false;
+          psh = false;
+          rst = false;
+          syn = true;
+          fin = false;
+          window = 0;
+          options = [];
+          sequence = Tcp.Sequence.of_int 0;
+          ack_number = Tcp.Sequence.of_int 0;
+          src_port = 1000;
+          dst_port = 1001; }
 
       let update_tcp_header_ ~src_port ~dst_port ~ack ~rst ~syn ~fin header =
         let open Tcp.Tcp_wire in
-        (match src_port with
-         | None -> ()
-         | Some x -> set_tcp_src_port header x);
-        (match dst_port with
-         | None -> ()
-         | Some x -> set_tcp_dst_port header x);
+        let src_port =
+          match src_port with
+          | None -> header.src_port
+          | Some x -> x
+        in
+        let dst_port =
+          match dst_port with
+          | None -> header.dst_port
+          | Some x -> x
+        in
         let fin = match fin with
-          | None -> get_fin header
+          | None -> header.fin
           | Some x -> x
         in
         let syn = match syn with
-          | None -> get_syn header
+          | None -> header.syn
           | Some x -> x
         in
         let rst = match rst with
-          | None -> get_rst header
+          | None -> header.rst
           | Some x -> x
         in
-        let psh = get_psh header in
+        let psh = header.psh in
         let ack = match ack with
-          | None -> get_ack header
+          | None -> header.ack
           | Some x -> x
         in
-        let urg = get_urg header in
-        let ece = get_ece header in
-        let cwr = get_cwr header in
+        let urg = header.urg in
+        let window = header.window in
+        let options = header.options in
+        let sequence = header.sequence in
+        let ack_number = header.ack_number in
 
-        set_tcp_flags header 0;
-        if fin then set_fin header;
-        if syn then set_syn header;
-        if rst then set_rst header;
-        if psh then set_psh header;
-        if urg then set_urg header;
-        if ece then set_ece header;
-        if cwr then set_cwr header;
-
-        header
+        { urg
+        ; ack
+        ; psh
+        ; rst
+        ; syn
+        ; fin
+        ; window
+        ; options
+        ; sequence
+        ; ack_number
+        ; src_port
+        ; dst_port }
 
       let tcp_payload_raw_to_byte_string c = Cstruct.to_string c
 
@@ -225,10 +247,10 @@ struct
   module Helpers = struct
     let data_to_tcp_pdu data =
       let open FT.PDU in
-      let header = data in
-      let data_offset = Tcp.Tcp_wire.get_data_offset data in
-      let data_raw = Cstruct.shift data data_offset in
-      TCP (TCP_pdu {header; payload= TCP_payload_raw data_raw})
+      match Tcp.Tcp_packet.Unmarshal.of_cstruct data with
+      | Error _ -> None
+      | Ok (header, payload) ->
+        Some (TCP (TCP_pdu {header; payload = TCP_payload_raw payload}))
 
     let get_icmpv4_ty data : FT.ICMPv4.icmpv4_type option =
       let open FT.ICMPv4 in
@@ -306,7 +328,8 @@ struct
     let side_B_port_end_exc = 15_000 in
     let { side_A_to_B_branch; side_B_to_A_branch } =
       let dst_addrs =
-        [| Ipaddr.V4.make 216 58 196 132
+        [| Ipaddr.V4.make 192 168 0 1
+             (* [| Ipaddr.V4.make 216 58 196 132 *)
         |]
       in
       translate_ipv4_side_A_to_random_dst_side_B ~conn_tracker:tracker ~side_A_addr ~side_B_addr
@@ -345,7 +368,7 @@ struct
                                    ; Contains_TCP,
                                      (* We block HTTP traffic naively, and translate supposedly HTTPS traffic *)
                                      select_first_match [| TCP_dst_port_eq 80, End Drop
-                                                         ; TCP_dst_port_eq 443, side_A_to_B_branch
+                                                         ; True, side_A_to_B_branch
                                                         |]
                                   |]
              ; Conn_state_eq { tracker; target_state = Conn_track.Established }, (* We consider all established traffic to be from side B to A during translation *)
@@ -369,17 +392,19 @@ struct
              C.log c "Decision : Forward\n"
              <&>
              match FT.PDU_to.ipv4_header pdu, FT.PDU_to.tcp_pdu pdu with
-             | Some ipv4_header, Some (TCP_pdu {header = tcp_header; payload = TCP_payload_raw _ }) -> (
+             | Some ipv4_header, Some (TCP_pdu {header = tcp_header; payload = TCP_payload_raw payload }) -> (
                  let src_addr = FT.IPv4.ipv4_header_to_src_addr ipv4_header in
                  let dst_addr = FT.IPv4.ipv4_header_to_dst_addr ipv4_header in
                  (* N.write n ~size:(N.mtu net + Ethernet_wire.sizeof_ethernet) (fun buffer ->
                   *   ) *)
-                 let tcp_header_len = Cstruct.len tcp_header in
+                 let tcp_len = Tcp.Tcp_wire.sizeof_tcp + Cstruct.len payload in
+                 let pseudoheader = I4.pseudoheader i4 dst_addr `TCP tcp_len in
                  let headerf buffer =
-                   Cstruct.blit tcp_header 0 buffer 0 tcp_header_len;
-                   tcp_header_len
+                   match Tcp.Tcp_packet.Marshal.into_cstruct ~pseudoheader ~payload tcp_header buffer with
+                   | Error e -> failwith e
+                   | Ok len -> len
                  in
-                 I4.write i4 ~src:src_addr dst_addr `TCP ~size:(Cstruct.len tcp_header) headerf [] >>=
+                 I4.write i4 ~src:src_addr dst_addr `TCP ~size:tcp_len headerf [payload] >>=
                  (fun _ -> Lwt.return_unit)
                )
              | _, _ -> Lwt.return_unit
@@ -405,13 +430,15 @@ struct
                 let open FT.PDU in
                 let open Base.IPv4 in
                 let header = {src_addr; dst_addr} in
-                let tcp_pdu = Helpers.data_to_tcp_pdu data in
-                let pdu =
-                  Layer3
-                    (IPv4
-                       (IPv4_pkt {header; payload= IPv4_payload_encap tcp_pdu}))
-                in
-                react pdu )
+                match Helpers.data_to_tcp_pdu data with
+                | None -> Lwt.return_unit
+                | Some tcp_pdu ->
+                  let pdu =
+                    Layer3
+                      (IPv4
+                         (IPv4_pkt {header; payload= IPv4_payload_encap tcp_pdu}))
+                  in
+                  react pdu )
               ~udp:(fun ~src:src_addr ~dst:dst_addr data -> Lwt.return_unit)
               ~default:(fun ~proto ~src:src_addr ~dst:dst_addr data ->
                 let open FT.PDU in
