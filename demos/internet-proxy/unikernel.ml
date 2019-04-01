@@ -381,8 +381,8 @@ struct
       (* Print out PDU for debugging/demo purpose *)
       C.log c (
         "Received pdu\n"
-        (* ^ *)
-        (* (FT.To_debug_string.pdu pdu) (\* To_debug_string.pdu is a pretty printer for PDUs provided by firewall-tree *\) *)
+        ^
+        (FT.To_debug_string.pdu pdu) (* To_debug_string.pdu is a pretty printer for PDUs provided by firewall-tree *)
       ) >>=
       (fun _ ->
          match FT.decide ftree ~src_netif:Net0 rlu_ipv4 rlu_ipv6 pdu with
@@ -395,17 +395,17 @@ struct
              | Some ipv4_header, Some (TCP_pdu {header = tcp_header; payload = TCP_payload_raw payload }) -> (
                  let src_addr = FT.IPv4.ipv4_header_to_src_addr ipv4_header in
                  let dst_addr = FT.IPv4.ipv4_header_to_dst_addr ipv4_header in
-                 (* N.write n ~size:(N.mtu net + Ethernet_wire.sizeof_ethernet) (fun buffer ->
-                  *   ) *)
                  let tcp_len = Tcp.Tcp_wire.sizeof_tcp + Cstruct.len payload in
-                 let pseudoheader = I4.pseudoheader i4 dst_addr `TCP tcp_len in
-                 let headerf buffer =
-                   match Tcp.Tcp_packet.Marshal.into_cstruct ~pseudoheader ~payload tcp_header buffer with
-                   | Error e -> failwith e
-                   | Ok len -> len
-                 in
-                 I4.write i4 ~src:src_addr dst_addr `TCP ~size:tcp_len headerf [payload] >>=
-                 (fun _ -> Lwt.return_unit)
+                 C.log c (Printf.sprintf "sizeof_tcp : %d, payload len : %d" Tcp.Tcp_wire.sizeof_tcp (Cstruct.len payload)) >>= (fun _ ->
+                     let pseudoheader = I4.pseudoheader i4 ~src:src_addr dst_addr `TCP (Ipv4_wire.sizeof_ipv4 + tcp_len) in
+                     let headerf buffer =
+                       match Tcp.Tcp_packet.Marshal.into_cstruct ~pseudoheader ~payload tcp_header buffer with
+                       | Error e -> failwith e
+                       | Ok len -> len
+                     in
+                     I4.write i4 ~src:src_addr dst_addr `TCP ~size:(Ipv4_wire.sizeof_ipv4 + tcp_len) headerf [payload] >>=
+                     (fun _ -> Lwt.return_unit)
+                   )
                )
              | _, _ -> Lwt.return_unit
            )
