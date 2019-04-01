@@ -283,6 +283,8 @@ struct
   let rlu_ipv4 = FT.RLU_IPv4.make ()
   let rlu_ipv6 = FT.RLU_IPv6.make ()
 
+
+  let start c m n e a i4 icmp4 tcp =
   (* Finally we define our policy through firewall tree
 
      See the diagram for a clearer representation
@@ -292,7 +294,18 @@ struct
     let open Pred in
     let open Selectors in
     let open Scanners in
+    let open Modifiers in
     let tracker = Conn_track.make ~max_conn:1000 ~init_size:10 ~timeout_ms:30_000L in
+    let addr = List.hd (I4.get_ip i4) in
+    let side_A_to_B_addr = addr in
+    let side_B_to_A_addr = addr in
+    let side_B_port_start = 1000 in
+    let side_B_port_end = 15_000 in
+    let { side_A_to_B_branch; side_B_to_A_branch } =
+      translate_ipv4_side_A_to_random_src_port_side_B ~conn_tracker:tracker ~side_A_addr ~side_B_addr
+        ~side_B_port_start ~side_B_port_end_exc ~max_conn:1000
+        (End Forward)
+    in
     Start
       { default = Drop
       ; next =
@@ -313,36 +326,28 @@ struct
                   by picking a negative or out of bound branch index
                *)
                [| Conn_state_eq { tracker; target_state = Conn_track.New }, (* We consider all new traffic to be from side A to B during translation *)
-                  Select (
-                    select_first_match [| Contains_ICMPv4, Select (filter ICMPv4_ty_eq_Echo_request
-                                                                     (* We reply every other ECHO request we receive *)
-                                                                     (Select (load_balance_pdu_based_round_robin
-                                                                                [| End Drop
-                                                                                 ; Scan (* Connection trackers are run in immutable mode in predicate
-                                                                                           evaluation, so we need to pass the PDU through the tracker
-                                                                                           again to actually update the connection state
-                                                                                        *)
-                                                                                     (pass_pdu_through_conn_tracker tracker
-                                                                                        (End Echo_reply))
-                                                                                |])))
-                                        ; Contains_TCP, Select (
-                                            (* We block HTTP traffic naively, and translate supposedly HTTPS traffic *)
-                                            select_first_match [| TCP_dst_port_eq 80, End Drop
-                                                                ; 
-                                                               |]
-                                          )
-                                       |]
-                  )
+                  select_first_match [| Contains_ICMPv4,
+                                        filter ICMPv4_ty_eq_Echo_request (* We reply every other ECHO request we receive *)
+                                          (load_balance_pdu_based_round_robin [| End Drop
+                                                                               ; (* Connection trackers are run in immutable mode in predicate
+                                                                                         evaluation, so we need to pass the PDU through the tracker
+                                                                                         again to actually update the connection state
+                                                                                 *)
+                                                                                 pass_pdu_through_conn_tracker tracker
+                                                                                   (End Echo_reply)
+                                                                              |])
+                                      ; Contains_TCP,
+                                        (* We block HTTP traffic naively, and translate supposedly HTTPS traffic *)
+                                        select_first_match [| TCP_dst_port_eq 80, End Drop
+                                                            ; TCP_dst_port_eq 443, side_A_to_B_branch
+                                                           |]
+                                     |]
                 ; Conn_state_eq { tracker; target_state = Conn_track.Established }, (* We consider all established traffic to be from side B to A during translation *)
-                  Select (
-                    select_first_match
-                      [|                    |]
-                  )
+                  side_B_to_A_branch
                |]
             )
       }
-
-  let start c m n e a i4 icmp4 tcp =
+      in
     (* Make a wrapper to call FT.decide and react to outcome *)
     let react pdu =
       (* Print out PDU for debugging/demo purpose *)
