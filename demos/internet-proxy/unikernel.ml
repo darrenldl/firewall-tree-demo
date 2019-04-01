@@ -303,8 +303,12 @@ struct
     let side_B_port_start = 1000 in
     let side_B_port_end_exc = 15_000 in
     let { side_A_to_B_branch; side_B_to_A_branch } =
-      translate_ipv4_side_A_to_random_src_port_side_B ~conn_tracker:tracker ~side_A_addr ~side_B_addr
-        ~side_B_port_start ~side_B_port_end_exc ~max_conn:1000
+      let dst_addrs =
+        [| Ipaddr.V4.make 216 58 196 132
+        |]
+      in
+      translate_ipv4_side_A_to_random_dst_side_B ~conn_tracker:tracker ~side_A_addr ~side_B_addr
+        ~side_B_port_start ~side_B_port_end_exc ~dst_addrs ~max_conn:1000
         (End Forward)
     in
     Start
@@ -352,15 +356,39 @@ struct
       (* Print out PDU for debugging/demo purpose *)
       C.log c (
         "Received pdu\n"
-        ^
-        (FT.To_debug_string.pdu pdu) (* To_debug_string.pdu is a pretty printer for PDUs provided by firewall-tree *)
+        (* ^ *)
+        (* (FT.To_debug_string.pdu pdu) (\* To_debug_string.pdu is a pretty printer for PDUs provided by firewall-tree *\) *)
       ) >>=
       (fun _ ->
          match FT.decide ftree ~src_netif:Net0 rlu_ipv4 rlu_ipv6 pdu with
          | Drop, _ ->
            C.log c "Decision : Drop\n"
-         | Forward, pdu ->
-           C.log c "Decision : Forward\n"
+         | Forward, pdu -> (
+             C.log c "Decision : Forward\n"
+             <&>
+             match FT.PDU_to.ipv4_header pdu, FT.PDU_to.tcp_pdu pdu with
+             | Some ipv4_header, Some (TCP_pdu {header = tcp_header; payload = TCP_payload_raw data }) -> (
+                 let src_addr = FT.IPv4.ipv4_header_to_src_addr ipv4_header in
+                 let dst_addr = FT.IPv4.ipv4_header_to_dst_addr ipv4_header in
+                 let src_port = FT.TCP.tcp_header_to_src_port tcp_header in
+                 let dst_port = FT.TCP.tcp_header_to_dst_port tcp_header in
+                 (* N.write n ~size:(N.mtu net + Ethernet_wire.sizeof_ethernet) (fun buffer ->
+                  *   ) *)
+                 let data_len = Cstruct.len data in
+                 C.log c (Printf.sprintf "data length : %d" data_len) >>=
+                 (fun _ ->
+                    let headerf buffer =
+                      Tcp.Tcp_wire.set_tcp_src_port buffer src_port;
+                      Tcp.Tcp_wire.set_tcp_dst_port buffer dst_port;
+                      Tcp.Tcp_wire.set_data_offset buffer Tcp.Tcp_wire.sizeof_tcp;
+                      Tcp.Tcp_wire.sizeof_tcp + data_len
+                    in
+                    I4.write i4 ~src:src_addr dst_addr `TCP ~size:(Tcp.Tcp_wire.sizeof_tcp + data_len) headerf [data] >>=
+                    (fun _ -> Lwt.return_unit)
+                 )
+               )
+             | _, _ -> Lwt.return_unit
+           )
          | Echo_reply, _ -> (
              C.log c "Decision : Echo_reply\n"
              <&>
