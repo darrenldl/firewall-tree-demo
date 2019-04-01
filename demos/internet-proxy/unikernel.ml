@@ -191,8 +191,9 @@ struct
   (* We feed the environment implementation to the functor to get our tree *)
   module FT = Firewall_tree.Make (Base)
 
-  (* We also want to use selectors and scanners provided by firewall-tree *)
+  (* We also want to use selectors, modifiers and scanners provided by firewall-tree *)
   module Selectors = Firewall_tree.Selectors.Make (FT)
+  module Modifiers = Firewall_tree.Modifiers.Make (FT)
   module Scanners = Firewall_tree.Scanners.Make (FT)
 
   (* We define some helpers to help wrapping things into processable types
@@ -297,10 +298,10 @@ struct
     let open Modifiers in
     let tracker = Conn_track.make ~max_conn:1000 ~init_size:10 ~timeout_ms:30_000L in
     let addr = List.hd (I4.get_ip i4) in
-    let side_A_to_B_addr = addr in
-    let side_B_to_A_addr = addr in
+    let side_A_addr = addr in
+    let side_B_addr = addr in
     let side_B_port_start = 1000 in
-    let side_B_port_end = 15_000 in
+    let side_B_port_end_exc = 15_000 in
     let { side_A_to_B_branch; side_B_to_A_branch } =
       translate_ipv4_side_A_to_random_src_port_side_B ~conn_tracker:tracker ~side_A_addr ~side_B_addr
         ~side_B_port_start ~side_B_port_end_exc ~max_conn:1000
@@ -309,43 +310,41 @@ struct
     Start
       { default = Drop
       ; next =
-          Select
-            (select_first_match
-               (* This selects the first branch with a satisfied predicate
+          select_first_match
+            (* This selects the first branch with a satisfied predicate
 
-                  We use the same connection tracker for all predicates so they share
-                  the same information, which is what we want
+               We use the same connection tracker for all predicates so they share
+               the same information, which is what we want
 
-                  Connection trackers are bidirectional, and will lookup which one is the
-                  initiator and which one is the responder if needed for a protocol (e.g. TCP),
-                  so we don't have to worry too much about placement
+               Connection trackers are bidirectional, and will lookup which one is the
+               initiator and which one is the responder if needed for a protocol (e.g. TCP),
+               so we don't have to worry too much about placement
 
-                  `Invalid` connection is implicitly dropped here
+               `Invalid` connection is implicitly dropped here
 
-                  Selectors can drop a pdu, which results in default decision,
-                  by picking a negative or out of bound branch index
-               *)
-               [| Conn_state_eq { tracker; target_state = Conn_track.New }, (* We consider all new traffic to be from side A to B during translation *)
-                  select_first_match [| Contains_ICMPv4,
-                                        filter ICMPv4_ty_eq_Echo_request (* We reply every other ECHO request we receive *)
-                                          (load_balance_pdu_based_round_robin [| End Drop
-                                                                               ; (* Connection trackers are run in immutable mode in predicate
-                                                                                         evaluation, so we need to pass the PDU through the tracker
-                                                                                         again to actually update the connection state
-                                                                                 *)
-                                                                                 pass_pdu_through_conn_tracker tracker
-                                                                                   (End Echo_reply)
-                                                                              |])
-                                      ; Contains_TCP,
-                                        (* We block HTTP traffic naively, and translate supposedly HTTPS traffic *)
-                                        select_first_match [| TCP_dst_port_eq 80, End Drop
-                                                            ; TCP_dst_port_eq 443, side_A_to_B_branch
-                                                           |]
-                                     |]
-                ; Conn_state_eq { tracker; target_state = Conn_track.Established }, (* We consider all established traffic to be from side B to A during translation *)
-                  side_B_to_A_branch
-               |]
-            )
+               Selectors can drop a pdu, which results in default decision,
+               by picking a negative or out of bound branch index
+            *)
+            [| Conn_state_eq { tracker; target_state = Conn_track.New }, (* We consider all new traffic to be from side A to B during translation *)
+               select_first_match [| Contains_ICMPv4,
+                                     filter ICMPv4_ty_eq_Echo_request (* We reply every other ECHO request we receive *)
+                                       (load_balance_pdu_based_round_robin [| End Drop
+                                                                            ; (* Connection trackers are run in immutable mode in predicate
+                                                                                      evaluation, so we need to pass the PDU through the tracker
+                                                                                      again to actually update the connection state
+                                                                              *)
+                                                                              pass_pdu_through_conn_tracker tracker
+                                                                                (End Echo_reply)
+                                                                           |])
+                                   ; Contains_TCP,
+                                     (* We block HTTP traffic naively, and translate supposedly HTTPS traffic *)
+                                     select_first_match [| TCP_dst_port_eq 80, End Drop
+                                                         ; TCP_dst_port_eq 443, side_A_to_B_branch
+                                                        |]
+                                  |]
+             ; Conn_state_eq { tracker; target_state = Conn_track.Established }, (* We consider all established traffic to be from side B to A during translation *)
+               side_B_to_A_branch
+            |]
       }
       in
     (* Make a wrapper to call FT.decide and react to outcome *)
