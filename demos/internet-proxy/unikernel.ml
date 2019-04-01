@@ -297,7 +297,7 @@ struct
       { default = Drop
       ; next =
           Select
-            (make_select_first_match
+            (select_first_match
                (* This selects the first branch with a satisfied predicate
 
                   We use the same connection tracker for all predicates so they share
@@ -314,28 +314,28 @@ struct
                *)
                [| Conn_state_eq { tracker; target_state = Conn_track.New }, (* We consider all new traffic to be from side A to B during translation *)
                   Select (
-                    make_select_first_match [| Contains_ICMPv4, Select (make_filter ICMPv4_ty_eq_Echo_request
-                                                                          (* We reply every other ECHO request we receive *)
-                                                                          (Select (make_pdu_based_load_balancer_round_robin
-                                                                                     [| End Drop
-                                                                                      ; Scan (* Connection trackers are run in immutable mode in predicate
-                                                                                                evaluation, so we need to pass the PDU through the tracker
-                                                                                                again to actually update the connection state
-                                                                                             *)
-                                                                                          (pass_pdu_through_conn_tracker tracker
-                                                                                             (End Echo_reply))
-                                                                                     |])))
-                                             ; Contains_TCP, Select (
-                                                 (* We block HTTP traffic naively, and translate supposedly HTTPS traffic *)
-                                                 make_select_first_match [| TCP_dst_port_eq 80, End Drop
-                                                                          ; 
-                                                                         |]
-                                               )
-                                            |]
+                    select_first_match [| Contains_ICMPv4, Select (filter ICMPv4_ty_eq_Echo_request
+                                                                     (* We reply every other ECHO request we receive *)
+                                                                     (Select (load_balance_pdu_based_round_robin
+                                                                                [| End Drop
+                                                                                 ; Scan (* Connection trackers are run in immutable mode in predicate
+                                                                                           evaluation, so we need to pass the PDU through the tracker
+                                                                                           again to actually update the connection state
+                                                                                        *)
+                                                                                     (pass_pdu_through_conn_tracker tracker
+                                                                                        (End Echo_reply))
+                                                                                |])))
+                                        ; Contains_TCP, Select (
+                                            (* We block HTTP traffic naively, and translate supposedly HTTPS traffic *)
+                                            select_first_match [| TCP_dst_port_eq 80, End Drop
+                                                                ; 
+                                                               |]
+                                          )
+                                       |]
                   )
                 ; Conn_state_eq { tracker; target_state = Conn_track.Established }, (* We consider all established traffic to be from side B to A during translation *)
                   Select (
-                    Selectors.make_select_first_match
+                    select_first_match
                       [|                    |]
                   )
                |]
@@ -349,7 +349,7 @@ struct
       C.log c (
         "Received pdu\n"
         ^
-        (FT.To_debug_string.pdu pdu)
+        (FT.To_debug_string.pdu pdu) (* To_debug_string.pdu is a pretty printer for PDUs provided by firewall-tree *)
       ) >>=
       (fun _ ->
          match FT.decide ftree ~src_netif:Net0 rlu_ipv4 rlu_ipv6 pdu with
