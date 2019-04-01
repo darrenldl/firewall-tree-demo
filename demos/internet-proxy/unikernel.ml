@@ -190,8 +190,10 @@ struct
 
   (* We feed the environment implementation to the functor to get our tree *)
   module FT = Firewall_tree.Make (Base)
-  (* We also want to selectors provided by firewall-tree *)
+
+  (* We also want to use selectors and scanners provided by firewall-tree *)
   module Selectors = Firewall_tree.Selectors.Make (FT)
+  module Scanners = Firewall_tree.Scanners.Make (FT)
 
   (* We define some helpers to help wrapping things into processable types
      for the tree
@@ -289,6 +291,7 @@ struct
     let open FT in
     let open Pred in
     let open Selectors in
+    let open Scanners in
     let tracker = Conn_track.make ~max_conn:1000 ~init_size:10 ~timeout_ms:30_000L in
     Start
       { default = Drop
@@ -313,12 +316,19 @@ struct
                   Select (
                     make_select_first_match [| Contains_ICMPv4, Select (make_filter ICMPv4_ty_eq_Echo_request
                                                                           (* We reply every other ECHO request we receive *)
-                                                                          (Select (make_pdu_based_load_balancer_round_robin [| End Drop
-                                                                                                                             ; End Echo_reply
-                                                                                                                            |])))
+                                                                          (Select (make_pdu_based_load_balancer_round_robin
+                                                                                     [| End Drop
+                                                                                      ; Scan (* Connection trackers are run in immutable mode in predicate
+                                                                                                evaluation, so we need to pass the PDU through the tracker
+                                                                                                again to actually update the connection state
+                                                                                             *)
+                                                                                          (pass_pdu_through_conn_tracker tracker
+                                                                                             (End Echo_reply))
+                                                                                     |])))
                                              ; Contains_TCP, Select (
                                                  (* We block HTTP traffic naively, and translate supposedly HTTPS traffic *)
                                                  make_select_first_match [| TCP_dst_port_eq 80, End Drop
+                                                                          ; 
                                                                          |]
                                                )
                                             |]
