@@ -1,7 +1,7 @@
 #!/bin/bash
 
 if [[ $1 == "" ]]; then
-  opam uninstall firewall-tree && opam install firewall-tree
+  opam uninstall firewall-tree && opam install -w firewall-tree
 fi
 
 cd demos/internet-proxy/
