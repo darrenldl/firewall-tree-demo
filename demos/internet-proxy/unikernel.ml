@@ -9,8 +9,7 @@ module Main
     (A : ARP)
     (I4 : IPV4)
     (ICMP4 : ICMPV4)
-    (T : TCP)
-    (S : STACKV4) =
+    (T : TCP) =
 struct
   (* We define our environment implementation (or tree base) for the firewall tree *)
   module Base = struct
@@ -310,7 +309,7 @@ struct
   let rlu_ipv6 = FT.RLU_IPv6.make ()
 
 
-  let start c m n e a i4 icmp4 tcp stack =
+  let start c m n e a i4 icmp4 tcp =
     (* Finally we define our policy through firewall tree
 
        See the diagram for a clearer representation
@@ -330,7 +329,7 @@ struct
 
       (* We declare a list of load balanced destination addresses *)
       let dst_addrs =
-        [|
+        [| Ipaddr.V4.make 192 168 0 1
         |]
       in
       let { translate_side_A_to_B; translate_side_B_to_A } =
