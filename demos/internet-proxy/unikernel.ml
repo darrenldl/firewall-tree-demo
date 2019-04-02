@@ -332,49 +332,40 @@ struct
       [| Ipaddr.V4.make 192 168 0 1
       |]
     in
-    let { side_A_to_B_branch; side_B_to_A_branch } =
+    let { translate_side_A_to_B; translate_side_B_to_A } =
       translate_ipv4_side_A_to_random_dst_side_B ~conn_tracker:tracker ~side_A_addr ~side_B_addr
         ~side_B_port_start ~side_B_port_end_exc ~dst_addrs ~max_conn:1000
-        (End Forward)
     in
     Start
       { default = Drop
       ; next =
+          (* This selects the first branch with a satisfied predicate
+
+             `Invalid` connection is implicitly dropped here
+
+             Selectors can drop a pdu by picking a negative or out of bound
+             branch index, which results in the default action (Drop in our case)
+          *)
           select_first_match
-            (* This selects the first branch with a satisfied predicate
-
-               We use the same connection tracker for all predicates so they share
-               the same information, which is what we want
-
-               Connection trackers are bidirectional, and will lookup which one is the
-               initiator and which one is the responder if needed for a protocol (e.g. TCP),
-               so we don't have to worry too much about placement
-
-               `Invalid` connection is implicitly dropped here
-
-               Selectors can drop a pdu, which results in default decision,
-               by picking a negative or out of bound branch index
-            *)
             [| Not (IPv4_src_addr_one_of dst_addrs), (* We consider all traffic not originating from one of the load balanced destination
                                                         to be from side A to B *)
                select_first_match [| Contains_ICMPv4,
                                      filter ICMPv4_ty_eq_Echo_request (* We reply every other ECHO request we receive *)
                                        (load_balance_pdu_based_round_robin [| End Drop
-                                                                            ; (* Connection trackers are run in immutable mode in predicate
-                                                                                      evaluation, so we need to pass the PDU through the tracker
-                                                                                      again to actually update the connection state
+                                                                            ; (* We pass the PDU through the tracker so the traffic is
+                                                                                 tracked
                                                                               *)
                                                                               pass_pdu_through_conn_tracker tracker
                                                                                 (End Echo_reply)
                                                                            |])
                                    ; Contains_TCP,
-                                     (* We block HTTP traffic naively, and translate supposedly HTTPS traffic *)
+                                     (* We block HTTP traffic naively, and translate all other traffic *)
                                      select_first_match [| TCP_dst_port_eq 80, End Drop
-                                                         ; True, side_A_to_B_branch
+                                                         ; True, translate_side_A_to_B (End Forward)
                                                         |]
                                   |]
              ; True, (* We consider all other traffic to be from side B to A *)
-               side_B_to_A_branch
+               translate_side_B_to_A (End Forward)
             |]
       }
       in
@@ -397,15 +388,15 @@ struct
              | Some ipv4_header, Some (TCP_pdu {header = tcp_header; payload = TCP_payload_raw payload }) -> (
                  let src_addr = FT.IPv4.ipv4_header_to_src_addr ipv4_header in
                  let dst_addr = FT.IPv4.ipv4_header_to_dst_addr ipv4_header in
-                 let tcp_len = Tcp.Tcp_wire.sizeof_tcp + Cstruct.len payload in
+                 let size = Tcp.Tcp_wire.sizeof_tcp + (Tcp.Options.lenv tcp_header.options) + Cstruct.len payload in
                  C.log c (Printf.sprintf "sizeof_tcp : %d, payload len : %d" Tcp.Tcp_wire.sizeof_tcp (Cstruct.len payload)) >>= (fun _ ->
-                     let pseudoheader = I4.pseudoheader i4 ~src:src_addr dst_addr `TCP (Ipv4_wire.sizeof_ipv4 + tcp_len) in
+                     let pseudoheader = I4.pseudoheader i4 ~src:src_addr dst_addr `TCP size in
                      let headerf buffer =
                        match Tcp.Tcp_packet.Marshal.into_cstruct ~pseudoheader ~payload tcp_header buffer with
                        | Error e -> failwith e
                        | Ok len -> len
                      in
-                     I4.write i4 ~src:src_addr dst_addr `TCP ~size:(Ipv4_wire.sizeof_ipv4 + tcp_len) headerf [payload] >>=
+                     I4.write i4 ~src:src_addr dst_addr `TCP ~size headerf [payload] >>=
                      (fun _ -> Lwt.return_unit)
                    )
                )
