@@ -7,7 +7,7 @@ fi
 cd demos/internet-proxy/
 
 mirage clean
-mirage configure -t hvt --ipv4=192.168.0.100/24
+mirage configure -t hvt --ipv4=192.168.0.100/24 --ipv4-gateway=192.168.0.254
 make
 
 ./solo5-hvt --net=tap100 proxy.hvt
