@@ -1,11 +1,13 @@
 #!/bin/bash
 
-opam uninstall firewall-tree && opam install firewall-tree
+if [[ $1 == "" ]]; then
+  opam uninstall firewall-tree && opam install firewall-tree
+fi
 
 cd demos/internet-proxy/
 
-make clean
-mirage configure -t hvt --ipv4=192.168.0.100
+mirage clean
+mirage configure -t hvt --ipv4=192.168.0.100/24
 make
 
 ./solo5-hvt --net=tap100 proxy.hvt
