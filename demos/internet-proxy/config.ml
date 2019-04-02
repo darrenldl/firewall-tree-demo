@@ -5,17 +5,22 @@ open Mirage_impl_ethernet
 open Mirage_impl_ip
 open Mirage_impl_icmp
 open Mirage_impl_tcp
+open Mirage_impl_stackv4
+open Mirage_impl_resolver
+open Mirage_impl_conduit
 
 let packages = [
   package "ethernet";
   package "firewall-tree";
   package "tcpip";
+  package "dns";
+  package "mirage-dns";
 ]
 
 let main =
   foreign
     ~packages
-    "Unikernel.Main" (console @-> mclock @-> network @-> ethernet @-> arpv4 @-> ipv4 @-> icmpv4 @-> tcp @-> job)
+    "Unikernel.Main" (console @-> mclock @-> network @-> ethernet @-> arpv4 @-> ipv4 @-> icmpv4 @-> tcp @-> stackv4 @-> job)
 
 let net = default_network
 let ethif = etif net
@@ -37,5 +42,7 @@ let tcp = direct_tcp ipv4
 
 let icmpv4 = direct_icmpv4 ipv4
 
+let stack = generic_stackv4 net
+
 let () =
-  register "proxy" ~packages [ main $ default_console $ default_monotonic_clock $ net $ ethif $ arp $ ipv4 $ icmpv4 $ tcp ]
+  register "proxy" ~packages [ main $ default_console $ default_monotonic_clock $ net $ ethif $ arp $ ipv4 $ icmpv4 $ tcp $ stack ]

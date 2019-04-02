@@ -9,7 +9,8 @@ module Main
     (A : ARP)
     (I4 : IPV4)
     (ICMP4 : ICMPV4)
-    (T : TCP) =
+    (T : TCP)
+    (S : STACKV4) =
 struct
   (* We define our environment implementation (or tree base) for the firewall tree *)
   module Base = struct
@@ -309,66 +310,66 @@ struct
   let rlu_ipv6 = FT.RLU_IPv6.make ()
 
 
-  let start c m n e a i4 icmp4 tcp =
-  (* Finally we define our policy through firewall tree
+  let start c m n e a i4 icmp4 tcp stack =
+    (* Finally we define our policy through firewall tree
 
-     See the diagram for a clearer representation
-  *)
-  let ftree =
-    let open FT in
-    let open Pred in
-    let open Selectors in
-    let open Scanners in
-    let open Modifiers in
-    let tracker = Conn_track.make ~max_conn:1000 ~init_size:10 ~timeout_ms:30_000L in
-    let addr = List.hd (I4.get_ip i4) in
-    let side_A_addr = addr in
-    let side_B_addr = addr in
-    let side_B_port_start = 1000 in
-    let side_B_port_end_exc = 15_000 in
+       See the diagram for a clearer representation
+    *)
+    let ftree =
+      let open FT in
+      let open Pred in
+      let open Selectors in
+      let open Scanners in
+      let open Modifiers in
+      let tracker = Conn_track.make ~max_conn:1000 ~init_size:10 ~timeout_ms:30_000L in
+      let addr = List.hd (I4.get_ip i4) in
+      let side_A_addr = addr in
+      let side_B_addr = addr in
+      let side_B_port_start = 1000 in
+      let side_B_port_end_exc = 15_000 in
 
-    (* We declare a list of load balanced destination addresses *)
-    let dst_addrs =
-      [| Ipaddr.V4.make 192 168 0 1
-      |]
-    in
-    let { translate_side_A_to_B; translate_side_B_to_A } =
-      translate_ipv4_side_A_to_random_dst_side_B ~conn_tracker:tracker ~side_A_addr ~side_B_addr
-        ~side_B_port_start ~side_B_port_end_exc ~dst_addrs ~max_conn:1000
-    in
-    Start
-      { default = Drop
-      ; next =
-          (* This selects the first branch with a satisfied predicate
-
-             `Invalid` connection is implicitly dropped here
-
-             Selectors can drop a pdu by picking a negative or out of bound
-             branch index, which results in the default action (Drop in our case)
-          *)
-          select_first_match
-            [| Not (IPv4_src_addr_one_of dst_addrs), (* We consider all traffic not originating from one of the load balanced destination
-                                                        to be from side A to B *)
-               select_first_match [| Contains_ICMPv4,
-                                     filter ICMPv4_ty_eq_Echo_request (* We reply every other ECHO request we receive *)
-                                       (load_balance_pdu_based_round_robin [| End Drop
-                                                                            ; (* We pass the PDU through the tracker so the traffic is
-                                                                                 tracked
-                                                                              *)
-                                                                              pass_pdu_through_conn_tracker tracker
-                                                                                (End Echo_reply)
-                                                                           |])
-                                   ; Contains_TCP,
-                                     (* We block HTTP traffic naively, and translate all other traffic *)
-                                     select_first_match [| TCP_dst_port_eq 80, End Drop
-                                                         ; True, translate_side_A_to_B (End Forward)
-                                                        |]
-                                  |]
-             ; True, (* We consider all other traffic to be from side B to A *)
-               translate_side_B_to_A (End Forward)
-            |]
-      }
+      (* We declare a list of load balanced destination addresses *)
+      let dst_addrs =
+        [|
+        |]
       in
+      let { translate_side_A_to_B; translate_side_B_to_A } =
+        translate_ipv4_side_A_to_random_dst_side_B ~conn_tracker:tracker ~side_A_addr ~side_B_addr
+          ~side_B_port_start ~side_B_port_end_exc ~dst_addrs ~max_conn:1000
+      in
+      Start
+        { default = Drop
+        ; next =
+            (* This selects the first branch with a satisfied predicate
+
+               `Invalid` connection is implicitly dropped here
+
+               Selectors can drop a pdu by picking a negative or out of bound
+               branch index, which results in the default action (Drop in our case)
+            *)
+            select_first_match
+              [| Not (IPv4_src_addr_one_of dst_addrs), (* We consider all traffic not originating from one of the load balanced destination
+                                                          to be from side A to B *)
+                 select_first_match [| Contains_ICMPv4,
+                                       filter ICMPv4_ty_eq_Echo_request (* We reply every other ECHO request we receive *)
+                                         (load_balance_pdu_based_round_robin [| End Drop
+                                                                              ; (* We pass the PDU through the tracker so the traffic is
+                                                                                   tracked
+                                                                                *)
+                                                                                pass_pdu_through_conn_tracker tracker
+                                                                                  (End Echo_reply)
+                                                                             |])
+                                     ; Contains_TCP,
+                                       (* We block HTTP traffic naively, and translate all other traffic *)
+                                       select_first_match [| TCP_dst_port_eq 80, End Drop
+                                                           ; True, translate_side_A_to_B (End Forward)
+                                                          |]
+                                    |]
+               ; True, (* We consider all other traffic to be from side B to A *)
+                 translate_side_B_to_A (End Forward)
+              |]
+        }
+    in
     (* Make a wrapper to call FT.decide and react to outcome *)
     let react pdu =
       (* Print out PDU for debugging/demo purpose *)
@@ -421,29 +422,29 @@ struct
          ~ipv4:
            (I4.input
               ~tcp:(fun ~src:src_addr ~dst:dst_addr data ->
-                let open FT.PDU in
-                let open Base.IPv4 in
-                let header = {src_addr; dst_addr} in
-                match Helpers.data_to_tcp_pdu data with
-                | None -> Lwt.return_unit
-                | Some tcp_pdu ->
-                  let pdu =
-                    Layer3
-                      (IPv4
-                         (IPv4_pkt {header; payload= IPv4_payload_encap tcp_pdu}))
-                  in
-                  react pdu )
+                  let open FT.PDU in
+                  let open Base.IPv4 in
+                  let header = {src_addr; dst_addr} in
+                  match Helpers.data_to_tcp_pdu data with
+                  | None -> Lwt.return_unit
+                  | Some tcp_pdu ->
+                    let pdu =
+                      Layer3
+                        (IPv4
+                           (IPv4_pkt {header; payload= IPv4_payload_encap tcp_pdu}))
+                    in
+                    react pdu )
               ~udp:(fun ~src:src_addr ~dst:dst_addr data -> Lwt.return_unit)
               ~default:(fun ~proto ~src:src_addr ~dst:dst_addr data ->
-                let open FT.PDU in
-                let open Base.IPv4 in
-                let open Base.ICMPv4 in
-                if proto = 1 then
-                  (* only care about ICMP *)
-                  match Helpers.get_icmpv4_ty data with
-                  | None ->
+                  let open FT.PDU in
+                  let open Base.IPv4 in
+                  let open Base.ICMPv4 in
+                  if proto = 1 then
+                    (* only care about ICMP *)
+                    match Helpers.get_icmpv4_ty data with
+                    | None ->
                       Lwt.return_unit
-                  | Some ty ->
+                    | Some ty ->
                       let ipv4_header =
                         {src_addr; dst_addr}
                       in
@@ -464,7 +465,7 @@ struct
                                  payload = IPv4_payload_icmp icmpv4_pkt}))
                       in
                       react pdu
-                else Lwt.return_unit )
+                  else Lwt.return_unit )
               i4)
          ~ipv6:(fun _ -> Lwt.return_unit)
          e)
