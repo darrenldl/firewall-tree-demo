@@ -326,12 +326,13 @@ struct
     let side_B_addr = addr in
     let side_B_port_start = 1000 in
     let side_B_port_end_exc = 15_000 in
+
+    (* We declare a list of load balanced destination addresses *)
+    let dst_addrs =
+      [| Ipaddr.V4.make 192 168 0 1
+      |]
+    in
     let { side_A_to_B_branch; side_B_to_A_branch } =
-      let dst_addrs =
-        [| Ipaddr.V4.make 192 168 0 254
-             (* [| Ipaddr.V4.make 216 58 196 132 *)
-        |]
-      in
       translate_ipv4_side_A_to_random_dst_side_B ~conn_tracker:tracker ~side_A_addr ~side_B_addr
         ~side_B_port_start ~side_B_port_end_exc ~dst_addrs ~max_conn:1000
         (End Forward)
@@ -354,7 +355,8 @@ struct
                Selectors can drop a pdu, which results in default decision,
                by picking a negative or out of bound branch index
             *)
-            [| Conn_state_eq { tracker; target_state = Conn_track.New }, (* We consider all new traffic to be from side A to B during translation *)
+            [| Not (IPv4_src_addr_one_of dst_addrs), (* We consider all traffic not originating from one of the load balanced destination
+                                                        to be from side A to B *)
                select_first_match [| Contains_ICMPv4,
                                      filter ICMPv4_ty_eq_Echo_request (* We reply every other ECHO request we receive *)
                                        (load_balance_pdu_based_round_robin [| End Drop
@@ -371,9 +373,8 @@ struct
                                                          ; True, side_A_to_B_branch
                                                         |]
                                   |]
-             ; Conn_state_eq { tracker; target_state = Conn_track.Established }, (* We consider all established traffic to be from side B to A during translation *)
+             ; True, (* We consider all other traffic to be from side B to A *)
                side_B_to_A_branch
-             ; True, End Test
             |]
       }
       in
