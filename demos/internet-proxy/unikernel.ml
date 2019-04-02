@@ -32,7 +32,7 @@ struct
        cleanup in Lookup_table, which is used for connection tracking,
        translation etc
     *)
-    let cur_time_ms () = Int64.div (MClock.elapsed_ns ()) 1000L
+    let cur_time_ms () = Int64.div (MClock.elapsed_ns ()) 1_000_000L
 
     (* we don't care about ethernet frames, use dummy implementation *)
     module Ether = Firewall_tree.Mock_tree_base.Ether
@@ -328,7 +328,7 @@ struct
     let side_B_port_end_exc = 15_000 in
     let { side_A_to_B_branch; side_B_to_A_branch } =
       let dst_addrs =
-        [| Ipaddr.V4.make 192 168 0 1
+        [| Ipaddr.V4.make 192 168 0 254
              (* [| Ipaddr.V4.make 216 58 196 132 *)
         |]
       in
