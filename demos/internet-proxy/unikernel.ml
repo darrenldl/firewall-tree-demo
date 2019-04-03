@@ -327,11 +327,9 @@ struct
       let side_B_port_start = 1000 in
       let side_B_port_end_exc = 15_000 in
 
-      (* We declare a list of load balanced destination addresses *)
-      let dst_addrs =
-        [| Ipaddr.V4.make 192 168 0 1
-        |]
-      in
+      (* We grab the list of load balanced destination addresses *)
+      let dst_addrs = Array.of_list (Key_gen.dst_addrs ()) in
+
       let { translate_side_A_to_B; translate_side_B_to_A } =
         translate_ipv4_side_A_to_random_dst_side_B ~conn_tracker:tracker ~side_A_addr ~side_B_addr
           ~side_B_port_start ~side_B_port_end_exc ~dst_addrs ~max_conn:1000
@@ -389,16 +387,14 @@ struct
                  let src_addr = FT.IPv4.ipv4_header_to_src_addr ipv4_header in
                  let dst_addr = FT.IPv4.ipv4_header_to_dst_addr ipv4_header in
                  let size = Tcp.Tcp_wire.sizeof_tcp + (Tcp.Options.lenv tcp_header.options) + Cstruct.len payload in
-                 C.log c (Printf.sprintf "sizeof_tcp : %d, payload len : %d" Tcp.Tcp_wire.sizeof_tcp (Cstruct.len payload)) >>= (fun _ ->
-                     let pseudoheader = I4.pseudoheader i4 ~src:src_addr dst_addr `TCP size in
-                     let headerf buffer =
-                       match Tcp.Tcp_packet.Marshal.into_cstruct ~pseudoheader ~payload tcp_header buffer with
-                       | Error e -> failwith e
-                       | Ok len -> len
-                     in
-                     I4.write i4 ~src:src_addr dst_addr `TCP ~size headerf [payload] >>=
-                     (fun _ -> Lwt.return_unit)
-                   )
+                 let pseudoheader = I4.pseudoheader i4 ~src:src_addr dst_addr `TCP size in
+                 let headerf buffer =
+                   match Tcp.Tcp_packet.Marshal.into_cstruct ~pseudoheader ~payload tcp_header buffer with
+                   | Error e -> failwith e
+                   | Ok len -> len
+                 in
+                 I4.write i4 ~src:src_addr dst_addr `TCP ~size headerf [payload] >>=
+                 (fun _ -> Lwt.return_unit)
                )
              | _, _ -> Lwt.return_unit
            )

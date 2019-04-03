@@ -8,6 +8,10 @@ open Mirage_impl_tcp
 open Mirage_impl_resolver
 open Mirage_impl_conduit
 
+let key_dst_addrs =
+  let doc = Key.Arg.info ~doc:"Destination IPv4 addresses to be used for load balancing" ["dst-addrs"] in
+  Key.(create "dst_addrs" Arg.(required (list ipv4_address) doc))
+
 let packages = [
   package "ethernet";
   package "firewall-tree";
@@ -18,6 +22,7 @@ let packages = [
 
 let main =
   foreign
+    ~keys:[Key.abstract key_dst_addrs]
     ~packages
     "Unikernel.Main" (console @-> mclock @-> network @-> ethernet @-> arpv4 @-> ipv4 @-> icmpv4 @-> tcp @-> job)
 
