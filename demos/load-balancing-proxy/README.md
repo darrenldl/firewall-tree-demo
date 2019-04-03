@@ -40,7 +40,9 @@ To communicate with the unikernel, we also need to add an IP to the tap interfac
 # ip addr add 192.168.0.254/24 dev tap100
 ```
 
-adjust your firewall settings if necessary to allow input traffic from tap100
+adjust your firewall settings if necessary to allow input traffic from tap100.
+
+The second device should have the 192.168.0.1 address
 
 ## Network
 
@@ -80,3 +82,55 @@ We show the graphical version of the policy below. The code version used in unik
 ![Policy](firewall-policy.png)
 
 To explain in text, essentially we want to reply to pings, but only every other ping packet, we block HTTP traffic very naively, and translate and forward all other TCP traffic to side B. Then for traffic from side B to A, we allow unconditionally.
+
+## Testing it out
+
+First we test the ping packet branch, if you do `ping 192.168.0.100`, you should see an output similar to the one shown below
+
+```bash
+$ ping 192.168.0.100
+PING 192.168.0.100 (192.168.0.100) 56(84) bytes of data.
+64 bytes from 192.168.0.100: icmp_seq=2 ttl=38 time=1.79 ms
+64 bytes from 192.168.0.100: icmp_seq=4 ttl=38 time=0.444 ms
+64 bytes from 192.168.0.100: icmp_seq=6 ttl=38 time=1.42 ms                                                                  
+64 bytes from 192.168.0.100: icmp_seq=8 ttl=38 time=1.25 ms                                                                  
+64 bytes from 192.168.0.100: icmp_seq=10 ttl=38 time=0.803 ms                                                                
+64 bytes from 192.168.0.100: icmp_seq=12 ttl=38 time=1.29 ms
+64 bytes from 192.168.0.100: icmp_seq=14 ttl=38 time=1.01 ms
+64 bytes from 192.168.0.100: icmp_seq=16 ttl=38 time=0.899 ms
+64 bytes from 192.168.0.100: icmp_seq=18 ttl=38 time=1.07 ms
+^C
+--- 192.168.0.100 ping statistics ---
+18 packets transmitted, 9 received, 50% packet loss, time 242ms
+rtt min/avg/max/mdev = 0.444/1.109/1.790/0.366 ms
+```
+
+And on the unikernel console, you should see an output similar to below
+
+```bash
+Received pdu
+Layer 3 | IPv4     | src  192.168.0.254
+                   | dst  192.168.0.100
+Layer 3 | ICMPv4   | type Echo request, id 4a49, seq 17
+                   | data
+                   |      00000000: 0800 548d 4a49 0011 5fa8 a45c 0000 0000 T�JI_��\
+                   |      00000001: 8a40 0c00 0000 0000 1011 1213 1415 1617  �@
+
+                   |      00000002: 1819 1a1b 1c1d 1e1f 2021 2223 2425 2627  ▒▒!"#$%&'
+                   |      00000003: 2829 2a2b 2c2d 2e2f 3031 3233 3435 3637  ()*+,-./01234567
+Decision : Drop
+
+Received pdu
+Layer 3 | IPv4     | src  192.168.0.254
+                   | dst  192.168.0.100
+Layer 3 | ICMPv4   | type Echo request, id 4a49, seq 18
+                   | data
+                   |      00000000: 0800 0f29 4a49 0012 60a8 a45c 0000 0000 )JI`��\
+                   |      00000001: cea3 0c00 0000 0000 1011 1213 1415 1617  Σ
+
+                   |      00000002: 1819 1a1b 1c1d 1e1f 2021 2223 2425 2627  ▒▒!"#$%&'
+                   |      00000003: 2829 2a2b 2c2d 2e2f 3031 3233 3435 3637  ()*+,-./01234567
+Decision : Echo_reply
+```
+
+
