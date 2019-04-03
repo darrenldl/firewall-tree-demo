@@ -92,9 +92,9 @@ $ ping 192.168.0.100
 PING 192.168.0.100 (192.168.0.100) 56(84) bytes of data.
 64 bytes from 192.168.0.100: icmp_seq=2 ttl=38 time=1.79 ms
 64 bytes from 192.168.0.100: icmp_seq=4 ttl=38 time=0.444 ms
-64 bytes from 192.168.0.100: icmp_seq=6 ttl=38 time=1.42 ms                                                                  
-64 bytes from 192.168.0.100: icmp_seq=8 ttl=38 time=1.25 ms                                                                  
-64 bytes from 192.168.0.100: icmp_seq=10 ttl=38 time=0.803 ms                                                                
+64 bytes from 192.168.0.100: icmp_seq=6 ttl=38 time=1.42 ms
+64 bytes from 192.168.0.100: icmp_seq=8 ttl=38 time=1.25 ms
+64 bytes from 192.168.0.100: icmp_seq=10 ttl=38 time=0.803 ms
 64 bytes from 192.168.0.100: icmp_seq=12 ttl=38 time=1.29 ms
 64 bytes from 192.168.0.100: icmp_seq=14 ttl=38 time=1.01 ms
 64 bytes from 192.168.0.100: icmp_seq=16 ttl=38 time=0.899 ms
