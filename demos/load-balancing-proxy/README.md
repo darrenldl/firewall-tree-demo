@@ -133,4 +133,18 @@ Layer 3 | ICMPv4   | type Echo request, id 4a49, seq 18
 Decision : Echo_reply
 ```
 
+Next we test out the TCP connection translation branches. Note that currently the connection tracker of the library is largely functional but fails to handle TCP retransmissions, and take RST PSH flags into account. So we'll only use very straightforward TCP connections here through netcat.
 
+On the second device (192.168.0.1), we listen on port 2000 (or anything other than 80)
+
+```bash
+nc -lp 2000
+```
+
+Then on the host machine (192.168.0.254), we connect to the proxy
+
+```bash
+nc 192.168.0.100 2000
+```
+
+Now if you type any text on either side, the same text should appear on the opposite end as well.
