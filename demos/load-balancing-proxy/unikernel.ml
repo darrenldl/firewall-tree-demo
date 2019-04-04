@@ -63,6 +63,9 @@ struct
 
          Header types can be mutable or immutable (update header functions return a copy of header anyway),
          we're picking mutable here as it allows easier modification
+
+         Lastly the make dummy header functions are needed for firewall-tree-test only, it's not used during
+         evaluation of the decision tree or in any of the components
       *)
       let make_dummy_ipv4_header () =
         {src_addr = Ipaddr.V4.make 192 168 0 1;
